@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-12
+
+### Fixed
+
+- MCP service calls now parse time-window strings and forward the complete
+  supported option set.
+- Service calls restore process-global model state after completion.
+- MCP disk-cache writes are atomic and do not expose partial JSON files.
+- MCP schemas no longer require optional prompts.
+- CI compile coverage now includes the service facade and Python 3.11/3.14.
+
 ## [0.2.1] - 2026-08-12
 
 ### Fixed

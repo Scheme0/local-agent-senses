@@ -38,3 +38,33 @@ def test_unknown_service_operation_is_rejected(monkeypatch):
         assert "Unknown tool" in str(exc)
     else:
         raise AssertionError("unknown service operation was accepted")
+
+
+def test_video_time_arguments_and_global_state_are_restored(monkeypatch):
+    calls = []
+    monkeypatch.setattr(vision, "ensure_ollama_started", lambda: True)
+    monkeypatch.setattr(vision, "resolve_model", lambda mode: "temporary-model")
+
+    def fake_analyze(media, args):
+        calls.append((media, args))
+        assert vision.ACTIVE_MODEL == "temporary-model"
+        print(json.dumps({"text": "ok", "mode": "window"}))
+
+    monkeypatch.setattr(vision, "analyze_video", fake_analyze)
+    vision.ACTIVE_MODEL = "original-model"
+    vision.CTX_OVERRIDE = 1234
+    result = service.execute("analyze_video", {
+        "video": "clip.mp4", "mode": "window", "from": "1:20",
+        "to": "2:00", "prompt": "look", "context": "prior",
+        "duration": 4, "fps": 2, "max_frames": 8, "no_dedupe": True,
+    })
+
+    assert json.loads(result)["text"] == "ok"
+    media, args = calls[0]
+    assert media == "clip.mp4"
+    assert args.start == 80.0 and args.end == 120.0
+    assert args.context == "prior"
+    assert args.duration == 4 and args.fps == 2 and args.max_frames == 8
+    assert args.no_dedupe is True
+    assert vision.ACTIVE_MODEL == "original-model"
+    assert vision.CTX_OVERRIDE == 1234

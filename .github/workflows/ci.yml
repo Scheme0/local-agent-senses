@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +21,7 @@ jobs:
       - name: Install pytest
         run: pip install pytest
       - name: Compile check
-        run: python -m py_compile vision.py config.py media_formats.py media.py ollama_client.py video_plans.py extras/sources.py extras/speech.py extras/mcp_server.py extras/capture.py extras/vram_watchdog.py scripts/generate_adapters.py
+        run: python -m py_compile vision.py config.py media_formats.py media.py ollama_client.py service.py video_plans.py extras/sources.py extras/speech.py extras/mcp_server.py extras/capture.py extras/vram_watchdog.py scripts/generate_adapters.py
       - name: Shell syntax check (Linux)
         if: runner.os == 'Linux'
         run: bash -n scripts/setup.sh

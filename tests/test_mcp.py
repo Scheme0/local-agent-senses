@@ -221,3 +221,18 @@ def test_mcp_tools_use_json_flag():
     assert {tool for tool, args in captured} == {
         "describe_image", "transcribe", "analyze_video", "transcribe_audio"
     }
+
+
+def test_mcp_schema_has_only_truly_required_media_fields():
+    tools = {tool["name"]: tool for tool in _load_mcp_module().TOOLS}
+    assert tools["describe_image"]["inputSchema"]["required"] == ["images"]
+    assert tools["analyze_video"]["inputSchema"]["required"] == ["video"]
+
+
+def test_mcp_disk_cache_write_is_atomic(monkeypatch):
+    mod = _load_mcp_module()
+    key = ("describe_image", (("images", ("x.png",)),))
+    mod._disk_write(key, "atomic")
+    path = mod._disk_path(key)
+    assert path is not None and path.exists()
+    assert not list(path.parent.glob("*.tmp"))

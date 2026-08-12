@@ -31,45 +31,61 @@ def execute(tool: str, args: dict) -> str:
 
     out = io.StringIO()
     err = io.StringIO()
+    previous_model = vision.ACTIVE_MODEL
+    previous_ctx = vision.CTX_OVERRIDE
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        if tool == "vision_status":
-            return vision.status_text()
-        if tool == "vision_check":
+        try:
+            if tool == "vision_status":
+                return vision.status_text()
+            if tool == "vision_check":
+                if not vision.ensure_ollama_started():
+                    raise RuntimeError("Vision backend is not available")
+                code = vision.run_health_check()
+                if code:
+                    raise RuntimeError("Vision health check failed")
+                return out.getvalue().strip()
+
             if not vision.ensure_ollama_started():
-                raise RuntimeError("Vision backend is not available")
-            code = vision.run_health_check()
-            if code:
-                raise RuntimeError("Vision health check failed")
-            return out.getvalue().strip()
+                target = config.api_base() if config.use_openai_api() else "Ollama"
+                raise RuntimeError(f"Cannot connect to {target}")
 
-        if not vision.ensure_ollama_started():
-            target = config.api_base() if config.use_openai_api() else "Ollama"
-            raise RuntimeError(f"Cannot connect to {target}")
-
-        if tool == "describe_image":
-            images = args["images"]
-            request = _args(media=list(images), prompt=args.get("prompt"),
-                            crop=args.get("crop"), size=args.get("size", "full"))
-            vision.ACTIVE_MODEL = vision.resolve_model("auto")
-            vision.analyze_images(request)
-        elif tool == "transcribe":
-            request = _args(media=[args["media"]], prompt=None,
-                            max_frames=args.get("max_frames"), transcribe=True,
-                            mode="text")
-            vision.ACTIVE_MODEL = vision.resolve_model("text")
-            vision.analyze_video(args["media"], request)
-        elif tool == "analyze_video":
-            request = _args(prompt=args.get("prompt"), mode=args.get("mode", "auto"),
-                            start=args.get("from"), end=args.get("to"),
-                            fps=args.get("fps"), max_frames=args.get("max_frames"))
-            vision.ACTIVE_MODEL = vision.resolve_model(request.mode)
-            vision.analyze_video(args["video"], request)
-        elif tool == "transcribe_audio":
-            request = _args(lang=args.get("lang", "auto"),
-                            asr_model=args.get("asr_model", "sensevoice"), mode="audio")
-            vision.analyze_audio(args["media"], request)
-        else:
-            raise RuntimeError(f"Unknown tool: {tool}")
+            if tool == "describe_image":
+                images = args["images"]
+                request = _args(media=list(images), prompt=args.get("prompt"),
+                                context=args.get("context"), crop=args.get("crop"),
+                                size=args.get("size", "full"))
+                vision.ACTIVE_MODEL = vision.resolve_model("auto")
+                vision.analyze_images(request)
+            elif tool == "transcribe":
+                request = _args(media=[args["media"]], prompt=args.get("prompt"),
+                                context=args.get("context"), crop=args.get("crop"),
+                                size=args.get("size", "full"),
+                                max_frames=args.get("max_frames"), transcribe=True,
+                                mode="text", band=args.get("band", "bottom"),
+                                no_dedupe=args.get("no_dedupe", False))
+                vision.ACTIVE_MODEL = vision.resolve_model("text")
+                vision.analyze_video(args["media"], request)
+            elif tool == "analyze_video":
+                start = args.get("from")
+                end = args.get("to")
+                request = _args(prompt=args.get("prompt"), context=args.get("context"),
+                                mode=args.get("mode", "auto"),
+                                start=vision.parse_time(start) if start is not None else None,
+                                end=vision.parse_time(end) if end is not None else None,
+                                duration=args.get("duration"), fps=args.get("fps"),
+                                max_frames=args.get("max_frames"),
+                                no_dedupe=args.get("no_dedupe", False))
+                vision.ACTIVE_MODEL = vision.resolve_model(request.mode)
+                vision.analyze_video(args["video"], request)
+            elif tool == "transcribe_audio":
+                request = _args(lang=args.get("lang", "auto"),
+                                asr_model=args.get("asr_model", "sensevoice"), mode="audio")
+                vision.analyze_audio(args["media"], request)
+            else:
+                raise RuntimeError(f"Unknown tool: {tool}")
+        finally:
+            vision.ACTIVE_MODEL = previous_model
+            vision.CTX_OVERRIDE = previous_ctx
 
     result = out.getvalue().strip()
     if not result:

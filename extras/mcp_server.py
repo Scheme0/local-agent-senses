@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -33,7 +34,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[1]
 VISION_PY = ROOT / "vision.py"
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.2.1"
+SERVER_VERSION = "0.2.2"
 PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_TIMEOUT = 1800
 
@@ -75,7 +76,7 @@ TOOLS = [
                 "size": {"type": "string", "enum": ["full", "small"],
                          "description": "small=320px thumbnail, full=original size"},
             },
-            "required": ["images", "prompt"],
+            "required": ["images"],
         },
     },
     {
@@ -89,6 +90,10 @@ TOOLS = [
             "properties": {
                 "media": {"type": "string",
                           "description": "Image or video path / URL"},
+                "prompt": {"type": "string"},
+                "context": {"type": "string"},
+                "crop": {"type": "string"},
+                "size": {"type": "string", "enum": ["full", "small"]},
                 "max_frames": {"type": "integer",
                                "description": "Frame cap for video transcription "
                                               "(default 48)"},
@@ -117,7 +122,7 @@ TOOLS = [
                 "fps": {"type": "number", "description": "Sampling frame rate"},
                 "max_frames": {"type": "integer", "description": "Frame cap"},
             },
-            "required": ["video", "prompt"],
+            "required": ["video"],
         },
     },
     {
@@ -230,8 +235,20 @@ def _disk_write(key: tuple, text: str) -> None:
         if p is None:
             return
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"ts": time.time(), "text": text},
-                                ensure_ascii=False), encoding="utf-8")
+        fd, temp_name = tempfile.mkstemp(prefix=".cache-", suffix=".tmp",
+                                         dir=p.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"ts": time.time(), "text": text}, f,
+                          ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_name, p)
+        finally:
+            try:
+                Path(temp_name).unlink(missing_ok=True)
+            except OSError:
+                pass
         files = sorted(p.parent.glob("*.json"), key=lambda f: f.stat().st_mtime)
         for old in files[:max(0, len(files) - CACHE_MAX * 4)]:
             old.unlink(missing_ok=True)

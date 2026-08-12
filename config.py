@@ -227,6 +227,14 @@ def speech_python() -> str:
     return ""
 
 
+def speech_python_explicit() -> str:
+    """Return only an explicitly configured speech interpreter.
+
+    Fast diagnostics must not invoke conda discovery or import checks.
+    """
+    return env("VISION_SPEECH_PYTHON") or cfg_value("speech_python")
+
+
 @functools.lru_cache(maxsize=4)
 def _find_conda_env_python(env_name: str, exe_name: str) -> str:
     """Locate an interpreter inside a conda env by name."""

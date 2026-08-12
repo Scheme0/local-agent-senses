@@ -34,7 +34,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[1]
 VISION_PY = ROOT / "vision.py"
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.4.1"
+SERVER_VERSION = "0.4.2"
 PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_TIMEOUT = 1800
 

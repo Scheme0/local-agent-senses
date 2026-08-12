@@ -33,6 +33,14 @@ def test_cli_doctor_returns_without_backend_within_smoke_budget(monkeypatch):
     assert proc.returncode == 0
 
 
+def test_cli_doctor_does_not_scan_conda(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "speech_python", lambda: (_ for _ in ()).throw(
+        AssertionError("doctor must not run conda speech discovery")))
+    proc = _run(VISION, "--doctor", "--json")
+    assert proc.returncode == 0
+
+
 def test_mcp_initialize_and_tools_list_smoke():
     messages = "\n".join([
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
@@ -41,7 +49,7 @@ def test_mcp_initialize_and_tools_list_smoke():
     proc = _run(MCP, input_text=messages)
     responses = [json.loads(line) for line in proc.stdout.splitlines()]
     assert proc.returncode == 0
-    assert responses[0]["result"]["serverInfo"]["version"] == "0.4.1"
+    assert responses[0]["result"]["serverInfo"]["version"] == "0.4.2"
     assert {tool["name"] for tool in responses[1]["result"]["tools"]} >= {
         "describe_image", "analyze_video", "vision_status"
     }

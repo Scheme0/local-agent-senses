@@ -43,7 +43,7 @@ import config  # noqa: E402
 import media  # noqa: E402
 import ollama_client  # noqa: E402
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (
@@ -1036,7 +1036,7 @@ def doctor_report() -> dict:
     else:
         add("ollama", "configured", ollama_base(), required=False)
         add("models", "not-checked", "run vision --check for live Ollama/model checks")
-    speech = config.speech_python()
+    speech = config.speech_python_explicit()
     add("speech", "available" if speech and Path(speech).exists() else "optional-missing",
         speech or "set VISION_SPEECH_PYTHON", required=False)
     add("mcp", "pass", "in-process service facade")

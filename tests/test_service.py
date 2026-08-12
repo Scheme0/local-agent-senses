@@ -68,3 +68,27 @@ def test_video_time_arguments_and_global_state_are_restored(monkeypatch):
     assert args.no_dedupe is True
     assert vision.ACTIVE_MODEL == "original-model"
     assert vision.CTX_OVERRIDE == 1234
+
+
+def test_execute_result_normalizes_json_payload(monkeypatch):
+    monkeypatch.setattr(service, "execute", lambda tool, args: json.dumps({
+        "text": "recognized", "mode": "image", "media": ["a.png"]
+    }))
+    result = service.execute_result("describe_image", {"images": ["a.png"]})
+    assert result.text == "recognized"
+    assert result.kind == "describe_image"
+    assert result.mode == "image"
+    assert result.metadata == {"media": ["a.png"]}
+    assert result.to_dict()["warnings"] == []
+
+
+def test_execute_result_wraps_expected_errors(monkeypatch):
+    monkeypatch.setattr(service, "execute",
+                        lambda tool, args: (_ for _ in ()).throw(RuntimeError("bad input")))
+    try:
+        service.execute_result("describe_image", {})
+    except service.ServiceError as exc:
+        assert exc.code == "service_error"
+        assert exc.to_dict()["message"] == "bad input"
+    else:
+        raise AssertionError("expected structured service error")

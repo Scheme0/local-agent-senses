@@ -34,7 +34,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[1]
 VISION_PY = ROOT / "vision.py"
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.2.2"
+SERVER_VERSION = "0.3.0"
 PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_TIMEOUT = 1800
 
@@ -160,7 +160,7 @@ TOOLS = [
 
 
 def run_service(tool: str, args: dict) -> str:
-    return vision_service.execute(tool, args)
+    return vision_service.execute_result(tool, args).to_json()
 
 
 def _cache_key(name: str, args: dict) -> tuple:
@@ -389,11 +389,13 @@ def handle_request(msg: dict):
                 },
             }
         except Exception as e:
+            error = {"code": getattr(e, "code", "tool_error"),
+                     "message": str(e)}
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
-                    "content": [{"type": "text", "text": str(e)}],
+                    "content": [{"type": "text", "text": json.dumps(error, ensure_ascii=False)}],
                     "isError": True,
                 },
             }

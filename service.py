@@ -9,7 +9,41 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 from types import SimpleNamespace
+from dataclasses import dataclass, asdict
+
+
+@dataclass
+class ServiceResult:
+    """Stable result envelope for Python and MCP integrations."""
+
+    text: str
+    kind: str
+    mode: str | None = None
+    metadata: dict | None = None
+    warnings: list[str] | None = None
+
+    def to_dict(self) -> dict:
+        value = asdict(self)
+        value["metadata"] = value["metadata"] or {}
+        value["warnings"] = value["warnings"] or []
+        return value
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False)
+
+
+class ServiceError(RuntimeError):
+    """Expected service failure with a machine-readable error code."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+    def to_dict(self) -> dict:
+        return {"code": self.code, "message": self.message}
 
 
 def _args(**values):
@@ -91,3 +125,22 @@ def execute(tool: str, args: dict) -> str:
     if not result:
         raise RuntimeError(err.getvalue().strip() or "Vision service returned no output")
     return result
+
+
+def execute_result(tool: str, args: dict) -> ServiceResult:
+    """Execute a tool and normalize its JSON output into ServiceResult."""
+    try:
+        raw = execute(tool, args)
+    except ServiceError:
+        raise
+    except RuntimeError as exc:
+        raise ServiceError("service_error", str(exc)) from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ServiceResult(text=raw, kind=tool)
+    if not isinstance(data, dict):
+        return ServiceResult(text=raw, kind=tool)
+    text = str(data.pop("text", raw))
+    mode = data.pop("mode", None)
+    return ServiceResult(text=text, kind=tool, mode=mode, metadata=data)

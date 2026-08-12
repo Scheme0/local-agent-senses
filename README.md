@@ -80,6 +80,10 @@ codex mcp add vision -- python /absolute/path/extras/mcp_server.py
 Available tools are `describe_image`, `transcribe`, `analyze_video`,
 `transcribe_audio`, `vision_status` and `vision_check`.
 
+Service results use a JSON envelope with `text`, `kind`, `mode`, `metadata` and
+`warnings`. Expected failures use `{ "code": ..., "message": ... }`, which
+lets MCP clients distinguish invalid input from backend or media failures.
+
 MCP validates image count, prompt size, frame count and FPS before invoking the
 CLI. The server uses an in-memory result cache. Disk caching is **disabled by
 default** because results may contain screenshots, transcripts or private

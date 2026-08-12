@@ -47,6 +47,10 @@ python extras/mcp_server.py
 MCP 工具包括 `describe_image`、`transcribe`、`analyze_video`、
 `transcribe_audio`、`vision_status` 和 `vision_check`。
 
+服务结果使用统一 JSON 结构，包含 `text`、`kind`、`mode`、`metadata` 和
+`warnings`。预期错误使用 `{ "code": ..., "message": ... }`，便于 MCP 客户端
+区分参数错误、后端错误和媒体错误。
+
 MCP 会校验图片数量、提示词长度、帧数和 FPS。结果只使用进程内缓存；磁盘
 缓存默认关闭，因为结果可能包含截图、转录和私有文档。如确有需要再开启：
 

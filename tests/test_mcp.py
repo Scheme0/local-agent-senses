@@ -229,6 +229,34 @@ def test_mcp_schema_has_only_truly_required_media_fields():
     assert tools["analyze_video"]["inputSchema"]["required"] == ["video"]
 
 
+def test_mcp_service_success_is_structured_json(monkeypatch):
+    mod = _load_mcp_module()
+    mod.run_service = lambda tool, args: json.dumps({
+        "text": "ok", "kind": tool, "mode": "image", "metadata": {}, "warnings": []
+    })
+    response = mod.handle_request({
+        "jsonrpc": "2.0", "id": 22, "method": "tools/call",
+        "params": {"name": "describe_image", "arguments": {"images": ["a.png"]}},
+    })
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert response["result"]["isError"] is False
+    assert payload["kind"] == "describe_image"
+
+
+def test_mcp_service_error_has_code_and_message(monkeypatch):
+    mod = _load_mcp_module()
+    error = RuntimeError("invalid media")
+    error.code = "invalid_input"
+    mod.run_service = lambda tool, args: (_ for _ in ()).throw(error)
+    response = mod.handle_request({
+        "jsonrpc": "2.0", "id": 23, "method": "tools/call",
+        "params": {"name": "describe_image", "arguments": {"images": ["a.png"]}},
+    })
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert response["result"]["isError"] is True
+    assert payload == {"code": "invalid_input", "message": "invalid media"}
+
+
 def test_mcp_disk_cache_write_is_atomic(monkeypatch):
     mod = _load_mcp_module()
     key = ("describe_image", (("images", ("x.png",)),))

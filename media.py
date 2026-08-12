@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import sys
+import tempfile
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -192,7 +193,9 @@ def normalize_image(data: bytes) -> bytes:
         return data
     conv_dir = config.TEMP_DIR / "conv"
     conv_dir.mkdir(parents=True, exist_ok=True)
-    src = conv_dir / f"in-{os.getpid()}.img"
+    fd, src_name = tempfile.mkstemp(prefix="in-", suffix=".img", dir=conv_dir)
+    os.close(fd)
+    src = Path(src_name)
     src.write_bytes(data)
     try:
         code, out, err = video_plans.run_ffmpeg(
@@ -231,6 +234,11 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
             if source and getattr(source, key):
                 direct = getattr(source, key)
                 ensure_url_safe(direct)
+                if not config.direct_url_streaming():
+                    data = fetch_url_bytes(direct, config.max_download_mb() * (1 << 20))
+                    return MediaSpec(kind=sniff_bytes(data), source="url", data=data,
+                                     subtitle_text=source.subtitle_text,
+                                     title=source.title)
                 return MediaSpec(
                     kind=want,
                     source="url",
@@ -246,10 +254,10 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
             cap_mb = config.max_image_mb() or config.max_download_mb() or 500
             data = fetch_url_bytes(arg, cap_mb * (1 << 20))
             return MediaSpec(kind="image", source="url", data=data)
-        if clean.endswith(tuple(formats.AUDIO_EXTS)):
+        if clean.endswith(tuple(formats.AUDIO_EXTS)) and config.direct_url_streaming():
             return MediaSpec(kind="audio", source="url", path=arg,
                              headers={"User-Agent": "Mozilla/5.0"})
-        if clean.endswith(tuple(formats.VIDEO_EXTS)):
+        if clean.endswith(tuple(formats.VIDEO_EXTS)) and config.direct_url_streaming():
             return MediaSpec(kind="video", source="url", path=arg,
                              headers={"User-Agent": "Mozilla/5.0"})
         # Unknown type: buffer and sniff (keeps the existing fallback behavior).

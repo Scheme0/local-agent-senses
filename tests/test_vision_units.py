@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config  # noqa: E402
 import vision  # noqa: E402
 
-TMP_ROOT = Path(__file__).resolve().parent / ".tmp"
+TMP_ROOT = Path(tempfile.gettempdir()) / "local-agent-senses-tests"
 
 
 def _with_config(cfg: dict, fn) -> None:
@@ -94,6 +94,7 @@ def test_config_file_values():
         "max_duration_h": "2",
         "max_image_mb": "7",
         "mcp_cache": "false",
+        "direct_url_stream": "true",
     }
 
     def check():
@@ -106,6 +107,7 @@ def test_config_file_values():
         assert config.max_duration_h() == 2.0
         assert config.max_image_mb() == 7
         assert config.mcp_cache_enabled() is False
+        assert config.direct_url_streaming() is True
 
     _with_config(cfg, check)
 

@@ -138,7 +138,17 @@ def max_image_mb() -> int:
 
 def mcp_cache_enabled() -> bool:
     """Persist MCP results on disk across server restarts."""
-    return _cfg_bool("VISION_MCP_CACHE", "mcp_cache", True)
+    return _cfg_bool("VISION_MCP_CACHE", "mcp_cache", False)
+
+
+def direct_url_streaming() -> bool:
+    """Allow ffmpeg to resolve remote media URLs directly.
+
+    Disabled by default because ffmpeg performs its own DNS resolution after
+    Python's SSRF check. The secure default buffers remote media through the
+    checked Python downloader before handing it to ffmpeg.
+    """
+    return _cfg_bool("VISION_DIRECT_URL_STREAM", "direct_url_stream", False)
 
 
 def mcp_cache_dir() -> str:

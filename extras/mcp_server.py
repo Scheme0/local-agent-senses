@@ -34,7 +34,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[1]
 VISION_PY = ROOT / "vision.py"
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.0.1"
+SERVER_VERSION = "0.1.0"
 PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_TIMEOUT = 1800
 
@@ -280,9 +280,13 @@ def _call_tool(name: str, args: dict) -> str:
         images = args.get("images") or []
         if not images:
             raise RuntimeError("images requires at least one image path or URL")
+        if not isinstance(images, list) or len(images) > 16 or not all(isinstance(x, str) and x.strip() for x in images):
+            raise RuntimeError("images must be a non-empty list of at most 16 strings")
+        prompt = args.get("prompt", "Describe these images in detail, including all visible text and UI elements.")
+        if not isinstance(prompt, str) or len(prompt) > 20000:
+            raise RuntimeError("prompt must be a string no longer than 20000 characters")
         cmd = list(images) + ["--json", "--prompt",
-                              args.get("prompt", "Describe these images in detail, "
-                                                  "including all visible text and UI elements.")]
+                              prompt]
         if args.get("crop"):
             cmd += ["--crop", str(args["crop"])]
         if args.get("size") == "small":
@@ -295,7 +299,10 @@ def _call_tool(name: str, args: dict) -> str:
             raise RuntimeError("media cannot be empty")
         cmd = [str(media), "--mode", "text", "--transcribe", "--json"]
         if args.get("max_frames"):
-            cmd += ["--max-frames", str(int(args["max_frames"]))]
+            max_frames = int(args["max_frames"])
+            if not 1 <= max_frames <= 1000:
+                raise RuntimeError("max_frames must be between 1 and 1000")
+            cmd += ["--max-frames", str(max_frames)]
         return run_cli(cmd)
 
     if name == "analyze_video":
@@ -312,6 +319,10 @@ def _call_tool(name: str, args: dict) -> str:
         for flag, key in (("--from", "from"), ("--to", "to"), ("--fps", "fps"),
                           ("--max-frames", "max_frames")):
             if args.get(key) is not None:
+                if key == "fps" and not 0 < float(args[key]) <= 60:
+                    raise RuntimeError("fps must be greater than 0 and at most 60")
+                if key == "max_frames" and not 1 <= int(args[key]) <= 1000:
+                    raise RuntimeError("max_frames must be between 1 and 1000")
                 cmd += [flag, str(args[key])]
         return run_cli(cmd)
 

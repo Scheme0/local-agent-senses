@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-08-12
+
+### Changed
+
+- Remote media is buffered through the checked Python downloader by default;
+  direct ffmpeg URL streaming is now opt-in with `direct_url_stream` or
+  `VISION_DIRECT_URL_STREAM=1`.
+- MCP disk caching is disabled by default to avoid persisting screenshots,
+  transcripts, and other potentially sensitive model output.
+- Image conversion uses unique temporary files and is safe for concurrent calls.
+- MCP input validation now limits image count, prompt size, frame count, and FPS.
+
+### Fixed
+
+- Tests can run from source archives that do not contain `.git` metadata.
+
 ## [0.0.1] - 2026-08-12
 
 ### Added

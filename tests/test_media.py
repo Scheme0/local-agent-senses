@@ -2,6 +2,7 @@
 """media.py unit tests: image transforms (mocked ffmpeg) and redirect checks."""
 import base64
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import video_plans  # noqa: E402
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
 WEBP = b"RIFF" + b"\x00" * 8 + b"WEBP" + b"\x00" * 32
-_TMP = ROOT / "tests" / ".tmp" / "media"
+_TMP = Path(tempfile.gettempdir()) / "local-agent-senses-tests" / "media"
 
 
 def test_image_to_b64_native_passthrough(monkeypatch):
@@ -54,7 +55,7 @@ def test_invalid_crop_format_rejected(monkeypatch):
 
 
 def test_normalize_image_converts_non_native_and_cleans_up(monkeypatch):
-    tmp = ROOT / "tests" / ".tmp" / "conv-test"
+    tmp = Path(tempfile.gettempdir()) / "local-agent-senses-tests" / "conv-test"
     tmp.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(config, "TEMP_DIR", tmp)
     monkeypatch.setattr(video_plans, "run_ffmpeg",

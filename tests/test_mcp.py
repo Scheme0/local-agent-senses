@@ -6,13 +6,14 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MCP_SERVER = ROOT / "extras" / "mcp_server.py"
-_TMP = ROOT / "tests" / ".tmp" / "mcp-cache"
+_TMP = Path(tempfile.gettempdir()) / "local-agent-senses-tests" / "mcp-cache"
 _DISK = _TMP / "disk-cache"
 
 
@@ -20,12 +21,18 @@ _DISK = _TMP / "disk-cache"
 def _isolated_disk_cache():
     _DISK.mkdir(parents=True, exist_ok=True)
     old = os.environ.get("VISION_MCP_CACHE_DIR")
+    old_enabled = os.environ.get("VISION_MCP_CACHE")
     os.environ["VISION_MCP_CACHE_DIR"] = str(_DISK)
+    os.environ["VISION_MCP_CACHE"] = "1"
     yield
     if old is None:
         os.environ.pop("VISION_MCP_CACHE_DIR", None)
     else:
         os.environ["VISION_MCP_CACHE_DIR"] = old
+    if old_enabled is None:
+        os.environ.pop("VISION_MCP_CACHE", None)
+    else:
+        os.environ["VISION_MCP_CACHE"] = old_enabled
     shutil.rmtree(_DISK, ignore_errors=True)
 
 

@@ -3,10 +3,11 @@
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "tests" / ".tmp" / "adapters"
+OUT = Path(tempfile.gettempdir()) / "local-agent-senses-tests" / "adapters"
 GENERATOR = ROOT / "scripts" / "generate_adapters.py"
 
 ADAPTER_FILES = (
@@ -96,21 +97,36 @@ def test_generator_skips_existing_without_force():
 
 
 def test_repo_tracks_no_static_adapters():
-    tracked = subprocess.run(
-        ["git", "ls-files"], cwd=ROOT, check=True, capture_output=True, text=True
-    ).stdout.splitlines()
+    git = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True
+    )
+    if git.returncode == 0:
+        tracked = git.stdout.splitlines()
+    else:
+        # Source archives do not contain .git metadata. Keep this invariant
+        # test runnable after extracting a release zip.
+        tracked = [str(p.relative_to(ROOT)).replace("\\", "/")
+                   for p in ROOT.rglob("*") if p.is_file()]
     for rel in ADAPTER_FILES:
         assert rel not in tracked, rel
 
 
 def test_readme_is_bilingual_and_has_generator():
     readme = _read("README.md")
+    assert "README.zh-CN.md" in readme
+    assert "Local vision" in readme
+    assert "MCP" in readme
+    assert "generate_adapters" in readme
+    assert "VISION_MCP_CACHE" in readme
+    readme = _read("README.md")
     assert "README.en.md" not in readme
     assert "## 中文" in readme
     assert "## English" in readme
     assert "MCP" in readme
     assert "generate_adapters" in readme
-    assert "assets/demo.png" in readme
+    assert "README.zh-CN.md" in readme
+    assert "Local vision" in readme
+    assert "VISION_MCP_CACHE" in readme
 
 
 def test_config_api_base_env():

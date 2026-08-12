@@ -151,6 +151,18 @@ def direct_url_streaming() -> bool:
     return _cfg_bool("VISION_DIRECT_URL_STREAM", "direct_url_stream", False)
 
 
+def service_timeout_sec() -> float:
+    raw = env("VISION_SERVICE_TIMEOUT", "") or cfg_value("service_timeout_sec")
+    try:
+        return max(0.1, float(raw)) if raw else 1800.0
+    except ValueError:
+        return 1800.0
+
+
+def service_max_concurrency() -> int:
+    return max(1, _cfg_int("VISION_MAX_CONCURRENCY", "max_concurrency", 1))
+
+
 def mcp_cache_dir() -> str:
     """Explicit MCP disk-cache directory (empty means a per-OS default)."""
     return env("VISION_MCP_CACHE_DIR") or cfg_value("mcp_cache_dir")

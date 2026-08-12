@@ -92,3 +92,22 @@ def test_execute_result_wraps_expected_errors(monkeypatch):
         assert exc.to_dict()["message"] == "bad input"
     else:
         raise AssertionError("expected structured service error")
+
+
+def test_service_busy_error(monkeypatch):
+    monkeypatch.setattr(service, "execute", lambda tool, args: '{"text":"ok"}')
+    monkeypatch.setattr(service, "_service_slot", lambda: _BusySlot())
+    try:
+        service.execute_result("describe_image", {})
+    except service.ServiceError as exc:
+        assert exc.code == "busy"
+    else:
+        raise AssertionError("expected busy error")
+
+
+class _BusySlot:
+    def acquire(self, timeout=None):
+        return False
+
+    def release(self):
+        pass

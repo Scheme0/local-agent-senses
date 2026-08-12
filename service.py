@@ -10,6 +10,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import threading
+import time
 from types import SimpleNamespace
 from dataclasses import dataclass, asdict
 
@@ -44,6 +46,22 @@ class ServiceError(RuntimeError):
 
     def to_dict(self) -> dict:
         return {"code": self.code, "message": self.message}
+
+
+_slots_lock = threading.Lock()
+_slots: threading.BoundedSemaphore | None = None
+_slots_size = 0
+
+
+def _service_slot() -> threading.BoundedSemaphore:
+    global _slots, _slots_size
+    import config
+    size = config.service_max_concurrency()
+    with _slots_lock:
+        if _slots is None or _slots_size != size:
+            _slots = threading.BoundedSemaphore(size)
+            _slots_size = size
+        return _slots
 
 
 def _args(**values):
@@ -129,12 +147,22 @@ def execute(tool: str, args: dict) -> str:
 
 def execute_result(tool: str, args: dict) -> ServiceResult:
     """Execute a tool and normalize its JSON output into ServiceResult."""
+    import config
+    started = time.monotonic()
+    slot = _service_slot()
+    if not slot.acquire(timeout=config.service_timeout_sec()):
+        raise ServiceError("busy", "Vision service is busy; retry later")
     try:
         raw = execute(tool, args)
     except ServiceError:
         raise
     except RuntimeError as exc:
-        raise ServiceError("service_error", str(exc)) from exc
+        code = "timeout" if "timed out" in str(exc).lower() else "service_error"
+        raise ServiceError(code, str(exc)) from exc
+    finally:
+        slot.release()
+    if time.monotonic() - started > config.service_timeout_sec():
+        raise ServiceError("timeout", "Vision service request exceeded its time budget")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

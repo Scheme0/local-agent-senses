@@ -36,6 +36,14 @@ class ResolvedStream:
     platform: str = ""
 
 
+class ResolverError(RuntimeError):
+    """A matched resolver failed and generic URL fallback must not hide it."""
+
+    def __init__(self, resolver: str, message: str):
+        super().__init__(f"{resolver} resolution failed: {message}")
+        self.resolver = resolver
+
+
 class Resolver(Protocol):
     """Resolver interface: match decides whether a URL is handled, resolve
     returns direct stream information."""
@@ -66,10 +74,16 @@ def try_resolve(url: str) -> ResolvedStream | None:
     direct-link/buffer path is then used)."""
     for resolver in _REGISTRY:
         try:
-            if resolver.match(url):
+            matched = resolver.match(url)
+        except Exception as exc:
+            raise ResolverError(resolver.name, f"could not inspect URL: {exc}") from exc
+        if matched:
+            try:
                 return resolver.resolve(url)
-        except Exception:
-            continue
+            except ResolverError:
+                raise
+            except Exception as exc:
+                raise ResolverError(resolver.name, str(exc)) from exc
     return None
 
 

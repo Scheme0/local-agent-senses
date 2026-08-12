@@ -35,6 +35,10 @@ vision --check
 vision-mcp
 ```
 
+运行 `vision --doctor` 可以离线检查依赖；加上 `--json` 可获得机器可读结果。
+服务并发和准入等待时间分别由 `VISION_MAX_CONCURRENCY` 与
+`VISION_SERVICE_TIMEOUT` 控制。
+
 可选依赖：`pip install .[speech]`、`pip install .[ytdlp]`、
 `pip install .[test]`。
 

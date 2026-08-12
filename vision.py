@@ -43,7 +43,7 @@ import config  # noqa: E402
 import media  # noqa: E402
 import ollama_client  # noqa: E402
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (
@@ -1019,6 +1019,40 @@ def run_health_check() -> int:
     return 1 if failed else 0
 
 
+def doctor_report() -> dict:
+    """Return dependency/config diagnostics without contacting model inference."""
+    checks = []
+    def add(name, status, detail="", required=True):
+        checks.append({"name": name, "status": status, "detail": detail,
+                       "required": required})
+    add("python", "pass", sys.version.split()[0])
+    try:
+        add("ffmpeg", "pass", video_plans.ffmpeg_bin())
+    except Exception as exc:
+        add("ffmpeg", "missing", str(exc))
+    try:
+        if config.use_openai_api():
+            add("model backend", "configured", config.api_base())
+        elif ollama_client.ready():
+            add("ollama", "pass", ollama_base())
+        else:
+            add("ollama", "unavailable", ollama_base())
+    except Exception as exc:
+        add("ollama", "error", str(exc))
+    try:
+        add("text model", "available" if _model_available(
+            config.text_model(), ollama_client.tags()) else "missing",
+            config.text_model())
+    except Exception as exc:
+        add("text model", "unknown", str(exc))
+    speech = config.speech_python()
+    add("speech", "available" if speech and Path(speech).exists() else "optional-missing",
+        speech or "set VISION_SPEECH_PYTHON", required=False)
+    add("mcp", "pass", "in-process service facade")
+    failed = [c for c in checks if c["required"] and c["status"] in ("missing", "unavailable", "error")]
+    return {"ok": not failed, "checks": checks}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Local multimodal vision & speech helper (images / videos / audio)")
@@ -1064,6 +1098,7 @@ def main() -> None:
     parser.add_argument("--keep-alive", default=None,
                         help="model residency, e.g. 5m / 0")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--doctor", action="store_true", help="diagnose local dependencies")
     parser.add_argument("--unload", action="store_true")
     parser.add_argument("--watchdog-start", action="store_true")
     parser.add_argument("--check", "--self-test", action="store_true", dest="check",
@@ -1082,6 +1117,11 @@ def main() -> None:
         os.environ.setdefault("VISION_MAX_TOKENS", "98304")
     if args.status:
         print(status_text())
+        return
+    if args.doctor:
+        print(json.dumps(doctor_report(), ensure_ascii=False) if args.json else
+              "\n".join(f"[{c['status'].upper()}] {c['name']}: {c['detail']}"
+                         for c in doctor_report()["checks"]))
         return
     if args.unload:
         unload_model()

@@ -52,6 +52,10 @@ vision-mcp
 vision-adapters --all
 ```
 
+Run `vision --doctor` for an offline dependency report. Add `--json` for
+machine-readable diagnostics. Service admission is limited by
+`VISION_MAX_CONCURRENCY` and `VISION_SERVICE_TIMEOUT`.
+
 The adapter generator is implemented by `scripts/generate_adapters.py` and can
 also be invoked directly when integrating with another agent.
 

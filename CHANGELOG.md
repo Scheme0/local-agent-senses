@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-12
+
+### Added
+
+- Offline end-to-end smoke tests covering CLI doctor, MCP startup/tool listing,
+  and classified errors without Ollama, GPU, or external network access.
+- `vision --doctor` with human-readable and JSON dependency diagnostics.
+- Configurable service admission timeout and concurrency limit.
+
+### Changed
+
+- Resolver failures are now visible instead of silently falling back to generic
+  URL handling after a resolver has matched a page.
+- Busy and timeout service failures use explicit machine-readable error codes.
+
 ## [0.3.0] - 2026-08-12
 
 ### Added

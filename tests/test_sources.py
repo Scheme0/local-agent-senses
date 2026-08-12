@@ -47,6 +47,24 @@ def test_try_resolve_returns_none_for_unknown():
     assert sources.try_resolve("https://example.com/video.mp4") is None
 
 
+def test_matching_resolver_failure_is_visible(monkeypatch):
+    class Broken:
+        name = "broken"
+        def match(self, url):
+            return True
+        def resolve(self, url):
+            raise RuntimeError("site blocked")
+
+    monkeypatch.setattr(sources, "_REGISTRY", [Broken()])
+    try:
+        sources.try_resolve("https://example.com/page")
+    except sources.ResolverError as exc:
+        assert "broken resolution failed" in str(exc)
+        assert "site blocked" in str(exc)
+    else:
+        raise AssertionError("resolver failure was silently hidden")
+
+
 def test_registered_contains_only_unified_resolver():
     # All video sites go through one channel (yt-dlp); no per-site resolvers.
     assert sources.registered() == ["yt-dlp"]

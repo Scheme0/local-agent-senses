@@ -13,6 +13,8 @@
   "max_image_mb": 20,
   "mcp_cache": false,
   "direct_url_stream": false,
+  "service_timeout_sec": 1800,
+  "max_concurrency": 1,
   "mcp_cache_dir": "",
   "api_base": "",
   "api_key": "",

@@ -43,7 +43,7 @@ import config  # noqa: E402
 import media  # noqa: E402
 import ollama_client  # noqa: E402
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (
@@ -1030,21 +1030,12 @@ def doctor_report() -> dict:
         add("ffmpeg", "pass", video_plans.ffmpeg_bin())
     except Exception as exc:
         add("ffmpeg", "missing", str(exc))
-    try:
-        if config.use_openai_api():
-            add("model backend", "configured", config.api_base())
-        elif ollama_client.ready():
-            add("ollama", "pass", ollama_base())
-        else:
-            add("ollama", "unavailable", ollama_base())
-    except Exception as exc:
-        add("ollama", "error", str(exc))
-    try:
-        add("text model", "available" if _model_available(
-            config.text_model(), ollama_client.tags()) else "missing",
-            config.text_model())
-    except Exception as exc:
-        add("text model", "unknown", str(exc))
+    if config.use_openai_api():
+        add("model backend", "configured", config.api_base())
+        add("models", "not-checked", "run vision --check for live endpoint/model checks")
+    else:
+        add("ollama", "configured", ollama_base(), required=False)
+        add("models", "not-checked", "run vision --check for live Ollama/model checks")
     speech = config.speech_python()
     add("speech", "available" if speech and Path(speech).exists() else "optional-missing",
         speech or "set VISION_SPEECH_PYTHON", required=False)

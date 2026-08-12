@@ -22,6 +22,15 @@ def test_cli_doctor_json_is_offline_and_structured():
     payload = json.loads(proc.stdout)
     assert "ok" in payload and isinstance(payload["checks"], list)
     assert {item["name"] for item in payload["checks"]} >= {"python", "mcp"}
+    assert any(item["name"] == "models" and item["status"] == "not-checked"
+               for item in payload["checks"])
+
+
+def test_cli_doctor_returns_without_backend_within_smoke_budget(monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://192.0.2.1:9")
+    proc = subprocess.run([sys.executable, str(VISION), "--doctor", "--json"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=5)
+    assert proc.returncode == 0
 
 
 def test_mcp_initialize_and_tools_list_smoke():
@@ -32,7 +41,7 @@ def test_mcp_initialize_and_tools_list_smoke():
     proc = _run(MCP, input_text=messages)
     responses = [json.loads(line) for line in proc.stdout.splitlines()]
     assert proc.returncode == 0
-    assert responses[0]["result"]["serverInfo"]["version"] == "0.4.0"
+    assert responses[0]["result"]["serverInfo"]["version"] == "0.4.1"
     assert {tool["name"] for tool in responses[1]["result"]["tools"]} >= {
         "describe_image", "analyze_video", "vision_status"
     }

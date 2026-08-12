@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a problem with local-agent-senses
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        中文亦可：请填写关键信息即可，不必逐字翻译。
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you run and what went wrong? Include the exact command.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, Ollama version, GPU, model names, config fields you changed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Paste `python vision.py --status` output and the failing command output. Remove API keys or other secrets first.
+      render: text
+    validations:
+      required: false
+  - type: dropdown
+    id: channel
+    attributes:
+      label: How are you using it?
+      options:
+        - CLI directly (python vision.py)
+        - pip-installed commands
+        - Codex skill
+        - MCP server
+        - Generated adapter (AGENTS.md / CLAUDE.md / ...)
+    validations:
+      required: true

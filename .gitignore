@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+tests/.tmp/
+.coverage
+build/
+dist/
+*.egg-info/
+venv/
+.venv/
+vision-config.json
+# Auto-generated per-agent adapter files (scripts/generate_adapters.py)
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/.clinerules/
+/.cursor/
+/.mcp.json
+*.tmp
+ffmpeg/
+bin/ffmpeg
+bin/ffmpeg.exe
+.DS_Store
+Thumbs.db

@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-agent-senses"
+version = "0.0.1"
+description = "Fully local multimodal vision & speech for text-only LLM agents (CLI + MCP)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Scheme0" }]
+keywords = ["vision", "ollama", "mcp", "llm-agent", "ocr", "asr", "multimodal"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Graphics :: Viewers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Repository = "https://github.com/Scheme0/local-agent-senses"
+
+[project.optional-dependencies]
+speech = ["funasr"]
+ytdlp = ["yt-dlp"]
+test = ["pytest>=7"]
+
+[project.scripts]
+vision = "vision:main"
+vision-mcp = "extras.mcp_server:main"
+vision-adapters = "scripts.generate_adapters:main"
+
+[tool.setuptools]
+py-modules = ["config", "media", "media_formats", "ollama_client", "video_plans", "vision"]
+packages = ["extras", "scripts"]
+
+[tool.setuptools.package-data]
+scripts = ["agent-adapter.md"]
+
+[tool.setuptools.data-files]
+"share/local-agent-senses" = ["vision-config.example.json"]

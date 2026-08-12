@@ -135,7 +135,7 @@ def test_mcp_cache_serves_second_call_without_running_cli():
         calls.append(args)
         return "cached-output"
 
-    mod.run_cli = fake_run_cli
+    mod.run_service = lambda tool, args: fake_run_cli([])
     img = _temp_file("cache-hit.png", b"fake-image-bytes")
     args = {"images": [str(img)], "prompt": "what is this"}
 
@@ -153,7 +153,7 @@ def test_mcp_cache_invalidates_when_local_file_changes():
     def fake_run_cli(args):
         return next(outputs)
 
-    mod.run_cli = fake_run_cli
+    mod.run_service = lambda tool, args: fake_run_cli([])
     img = _temp_file("cache-invalidate.png", b"version-one")
     args = {"images": [str(img)], "prompt": "what is this"}
 
@@ -169,7 +169,7 @@ def test_mcp_cache_expires_after_ttl():
     def fake_run_cli(args):
         return next(outputs)
 
-    mod.run_cli = fake_run_cli
+    mod.run_service = lambda tool, args: fake_run_cli([])
     img = _temp_file("cache-ttl.png", b"fake-image-bytes")
     args = {"images": [str(img)], "prompt": "what is this"}
 
@@ -186,7 +186,7 @@ def test_mcp_disk_cache_persists_across_instances():
         calls1.append(args)
         return "disk-persisted"
 
-    mod1.run_cli = fake_run_cli
+    mod1.run_service = lambda tool, args: fake_run_cli([])
     img = _temp_file("disk-cache-hit.png", b"same-bytes")
     args = {"images": [str(img)], "prompt": "q"}
     assert mod1.call_tool("describe_image", args) == "disk-persisted"
@@ -194,7 +194,7 @@ def test_mcp_disk_cache_persists_across_instances():
 
     mod2 = _load_mcp_module()  # fresh module: empty in-memory cache
     calls2 = []
-    mod2.run_cli = lambda args: calls2.append(args) or "unexpected"
+    mod2.run_service = lambda tool, args: calls2.append((tool, args)) or "unexpected"
     assert mod2.call_tool("describe_image", args) == "disk-persisted"
     assert calls2 == []
 
@@ -202,7 +202,7 @@ def test_mcp_disk_cache_persists_across_instances():
 def test_mcp_disk_cache_disabled_writes_nothing():
     os.environ["VISION_MCP_CACHE"] = "0"
     mod = _load_mcp_module()
-    mod.run_cli = lambda args: "x"
+    mod.run_service = lambda tool, args: "x"
     img = _temp_file("disk-off.png", b"bytes")
     assert mod.call_tool("describe_image",
                          {"images": [str(img)], "prompt": "q"}) == "x"
@@ -212,10 +212,12 @@ def test_mcp_disk_cache_disabled_writes_nothing():
 def test_mcp_tools_use_json_flag():
     mod = _load_mcp_module()
     captured = []
-    mod.run_cli = lambda args: captured.append(args) or "{}"
+    mod.run_service = lambda tool, args: captured.append((tool, args)) or "{}"
     mod.call_tool("describe_image", {"images": ["a.png"], "prompt": "p"})
     mod.call_tool("transcribe", {"media": "a.mp4"})
     mod.call_tool("analyze_video", {"video": "a.mp4", "prompt": "p"})
     mod.call_tool("transcribe_audio", {"media": "a.wav"})
     assert len(captured) == 4
-    assert all("--json" in args for args in captured)
+    assert {tool for tool, args in captured} == {
+        "describe_image", "transcribe", "analyze_video", "transcribe_audio"
+    }

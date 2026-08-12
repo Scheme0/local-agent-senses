@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Tests can run from source archives that do not contain `.git` metadata.
 
+## [0.2.0] - 2026-08-12
+
+### Changed
+
+- MCP requests now use an in-process Python service facade instead of spawning
+  a new CLI subprocess for every tool call.
+- The new `service.py` boundary is reusable by future Python integrations while
+  preserving the existing CLI and MCP result formats.
+
 ## [0.0.1] - 2026-08-12
 
 ### Added

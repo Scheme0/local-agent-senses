@@ -22,7 +22,6 @@ vision_status / vision_check.
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -34,7 +33,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[1]
 VISION_PY = ROOT / "vision.py"
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_TIMEOUT = 1800
 
@@ -42,8 +41,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 try:
     import config as vision_config  # noqa: E402
+    import service as vision_service  # noqa: E402
 except Exception:
     vision_config = None
+    vision_service = None
 
 # Result cache: agents often re-ask about the same media, and local vision
 # inference is the slow part. Same tool + same arguments (with local file
@@ -153,20 +154,8 @@ TOOLS = [
 ]
 
 
-def run_cli(args: list[str]) -> str:
-    proc = subprocess.run(
-        [sys.executable, str(VISION_PY)] + args,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=DEFAULT_TIMEOUT,
-    )
-    out = proc.stdout.strip()
-    err = proc.stderr.strip()
-    if proc.returncode != 0:
-        raise RuntimeError(err or out or f"vision.py exited with code {proc.returncode}")
-    return out
+def run_service(tool: str, args: dict) -> str:
+    return vision_service.execute(tool, args)
 
 
 def _cache_key(name: str, args: dict) -> tuple:
@@ -291,7 +280,8 @@ def _call_tool(name: str, args: dict) -> str:
             cmd += ["--crop", str(args["crop"])]
         if args.get("size") == "small":
             cmd += ["--size", "small"]
-        return run_cli(cmd)
+        return run_service("describe_image", {"images": images,
+            "prompt": prompt, "crop": args.get("crop"), "size": args.get("size", "full")})
 
     if name == "transcribe":
         media = args.get("media")
@@ -303,7 +293,8 @@ def _call_tool(name: str, args: dict) -> str:
             if not 1 <= max_frames <= 1000:
                 raise RuntimeError("max_frames must be between 1 and 1000")
             cmd += ["--max-frames", str(max_frames)]
-        return run_cli(cmd)
+        return run_service("transcribe", {"media": str(media),
+            "max_frames": int(args["max_frames"]) if args.get("max_frames") else None})
 
     if name == "analyze_video":
         video = args.get("video")
@@ -324,7 +315,10 @@ def _call_tool(name: str, args: dict) -> str:
                 if key == "max_frames" and not 1 <= int(args[key]) <= 1000:
                     raise RuntimeError("max_frames must be between 1 and 1000")
                 cmd += [flag, str(args[key])]
-        return run_cli(cmd)
+        return run_service("analyze_video", {"video": str(video),
+            "prompt": args.get("prompt"), "mode": mode, "from": args.get("from"),
+            "to": args.get("to"), "fps": args.get("fps"),
+            "max_frames": args.get("max_frames")})
 
     if name == "transcribe_audio":
         media = args.get("media")
@@ -333,13 +327,14 @@ def _call_tool(name: str, args: dict) -> str:
         cmd = [str(media), "--mode", "audio", "--json",
                "--lang", str(args.get("lang", "auto")),
                "--asr-model", str(args.get("asr_model", "sensevoice"))]
-        return run_cli(cmd)
+        return run_service("transcribe_audio", {"media": str(media),
+            "lang": args.get("lang", "auto"), "asr_model": args.get("asr_model", "sensevoice")})
 
     if name == "vision_status":
-        return run_cli(["--status"])
+        return run_service("vision_status", {})
 
     if name == "vision_check":
-        return run_cli(["--check"])
+        return run_service("vision_check", {})
 
     raise RuntimeError(f"Unknown tool: {name}")
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agent-senses"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fully local multimodal vision & speech for text-only LLM agents (CLI + MCP)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,7 +41,7 @@ vision-mcp = "extras.mcp_server:main"
 vision-adapters = "scripts.generate_adapters:main"
 
 [tool.setuptools]
-py-modules = ["config", "media", "media_formats", "ollama_client", "video_plans", "vision"]
+py-modules = ["config", "media", "media_formats", "ollama_client", "service", "video_plans", "vision"]
 packages = ["extras", "scripts"]
 
 [tool.setuptools.package-data]

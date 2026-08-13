@@ -15,7 +15,7 @@ def _field(text: str, key: str) -> str:
 def test_pyproject_metadata():
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert _field(text, "name") == "local-agent-senses"
-    assert _field(text, "version") == "0.4.6"
+    assert _field(text, "version") == "0.5.0"
     assert _field(text, "requires-python") == ">=3.10"
     scripts = text.split("[project.scripts]")[1].split("[tool.setuptools]")[0]
     assert "vision = \"vision:main\"" in scripts
@@ -25,13 +25,13 @@ def test_pyproject_metadata():
 def test_server_version_matches_pyproject():
     src = (ROOT / "extras" / "mcp_server.py").read_text(encoding="utf-8")
     m = re.search(r'SERVER_VERSION = "([^"]+)"', src)
-    assert m and m.group(1) == "0.4.6"
+    assert m and m.group(1) == "0.5.0"
 
 
 def test_cli_version_matches_pyproject():
     src = (ROOT / "vision.py").read_text(encoding="utf-8")
     m = re.search(r'__version__ = "([^"]+)"', src)
-    assert m and m.group(1) == "0.4.6"
+    assert m and m.group(1) == "0.5.0"
 
 
 def test_no_stale_version_references():

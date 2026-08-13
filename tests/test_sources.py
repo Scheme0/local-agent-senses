@@ -123,3 +123,10 @@ def test_best_stream_ytdlp_style_fields():
     assert sources._best_stream(formats_list, want_video=False) == "audio.m4a"
     assert sources._best_stream([{"url": "x.mp4", "vcodec": "avc1",
                                   "acodec": "none"}], want_video=False) == ""
+
+
+def test_ytdlp_skips_pdf_links(monkeypatch):
+    r = sources.YtDlpResolver()
+    monkeypatch.setattr(sources, "ytdlp_available", lambda: True)
+    assert not r.match("https://example.com/doc.pdf")
+    assert not r.match("https://example.com/report.PDF?download=1")

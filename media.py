@@ -5,7 +5,9 @@ import base64
 import ipaddress
 import os
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -106,13 +108,15 @@ def _load_sources():
 
 @dataclass
 class MediaSpec:
-    kind: str                       # image / video / audio
+    kind: str                       # image / video / audio / pdf
     source: str                     # local / url / hls / stdin
     path: str | None = None         # file path or streamable URL
     data: bytes | None = None       # in-memory bytes (image / stdin / unknown URL)
     headers: dict | None = None     # direct-link request headers (site signature / UA)
     subtitle_text: str | None = None
     title: str | None = None
+    pages: list[bytes] | None = None   # rasterized PDF page PNGs
+    truncated: bool = False            # PDF had more pages than the configured cap
 
 
 def is_url(s: str) -> bool:
@@ -252,6 +256,68 @@ def normalize_image(data: bytes) -> bytes:
             pass
 
 
+def _pdf_renderer_exe() -> str:
+    """Locate the PDF rasterizer: VISION_PDF_RENDERER / pdf_renderer > pdftoppm."""
+    explicit = config.env("VISION_PDF_RENDERER") or config.cfg_value("pdf_renderer")
+    if explicit and Path(explicit).exists():
+        return explicit
+    found = shutil.which("pdftoppm")
+    if found:
+        return found
+    raise RuntimeError(
+        "PDF rasterizer not found. Install poppler-utils (pdftoppm) and add it "
+        "to PATH, or set VISION_PDF_RENDERER / the pdf_renderer config field to "
+        "the pdftoppm executable.")
+
+
+def rasterize_pdf(data: bytes) -> tuple[list[bytes], bool]:
+    """Render a PDF's pages to PNG images; returns (pages, truncated).
+
+    Uses pdftoppm (poppler). The PDF is written to a temporary file and pages
+    are rendered to temporary PNGs; all intermediates are cleaned up and only
+    the in-memory page bytes survive.
+    """
+    exe = _pdf_renderer_exe()
+    cap = config.max_pdf_pages()
+    dpi = config.pdf_dpi()
+    # Render one extra page so truncation can be detected without pdfinfo.
+    limit = (cap + 1) if cap > 0 else None
+    config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=config.TEMP_DIR, prefix="pdf-") as tmp:
+        src = Path(tmp) / "in.pdf"
+        src.write_bytes(data)
+        prefix = Path(tmp) / "page"
+        cmd = [exe, "-png", "-r", str(dpi)]
+        if limit is not None:
+            cmd += ["-l", str(limit)]
+        cmd += [str(src), str(prefix)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "PDF rasterization timed out (the document may be too large).") from None
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"PDF rasterization failed (is it a valid PDF?): "
+                               f"{err[:300]}")
+
+        def _page_num(p: Path) -> int:
+            m = re.fullmatch(r"page-(\d+)\.png", p.name)
+            return int(m.group(1)) if m else 0
+
+        pages = [p.read_bytes() for p in sorted(tmp.glob("page-*.png"), key=_page_num)]
+    if not pages:
+        raise RuntimeError("PDF rasterization produced no pages.")
+    truncated = cap > 0 and len(pages) > cap
+    return (pages[:cap] if truncated else pages), truncated
+
+
+def _rasterized_pdf(source: str, data: bytes, path: str | None = None) -> MediaSpec:
+    pages, truncated = rasterize_pdf(data)
+    return MediaSpec(kind="pdf", source=source, path=path, data=data,
+                     pages=pages, truncated=truncated)
+
+
 def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
     """Unify any input (path / URL / video-site link / m3u8 / stdin) into a
     MediaSpec. Known video/audio URL extensions return a streamable address
@@ -262,6 +328,8 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
         kind = sniff_bytes(data)
         if kind == "image":
             _check_image_size(len(data))
+        elif kind == "pdf":
+            return _rasterized_pdf("stdin", data)
         else:
             check_stdin_size(len(data))
         return MediaSpec(kind=kind, source="stdin", data=data)
@@ -295,6 +363,9 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
             cap_mb = config.max_image_mb() or config.max_download_mb() or 500
             data = fetch_url_bytes(arg, cap_mb * (1 << 20))
             return MediaSpec(kind="image", source="url", data=data)
+        if clean.endswith(tuple(formats.DOCUMENT_EXTS)):
+            data = fetch_url_bytes(arg, config.max_download_mb() * (1 << 20))
+            return _rasterized_pdf("url", data)
         if clean.endswith(tuple(formats.AUDIO_EXTS)) and config.direct_url_streaming():
             return MediaSpec(kind="audio", source="url", path=arg,
                              headers={"User-Agent": "Mozilla/5.0"})
@@ -303,7 +374,10 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
                              headers={"User-Agent": "Mozilla/5.0"})
         # Unknown type: buffer and sniff (keeps the existing fallback behavior).
         data = fetch_url_bytes(arg, config.max_download_mb() * (1 << 20))
-        return MediaSpec(kind=sniff_bytes(data), source="url", data=data)
+        kind = sniff_bytes(data)
+        if kind == "pdf":
+            return _rasterized_pdf("url", data)
+        return MediaSpec(kind=kind, source="url", data=data)
 
     path = Path(arg)
     if not path.exists():
@@ -311,6 +385,8 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
     spec = MediaSpec(kind=sniff_kind(path), source="local", path=str(path))
     if spec.kind == "image":
         _check_image_size(path.stat().st_size)
+    elif spec.kind == "pdf":
+        return _rasterized_pdf("local", path.read_bytes(), str(path))
     return spec
 
 

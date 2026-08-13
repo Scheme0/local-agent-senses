@@ -44,7 +44,7 @@ import media  # noqa: E402
 import ollama_client  # noqa: E402
 import video_plans  # noqa: E402
 
-__version__ = "0.4.6"
+__version__ = "0.5.0"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (
@@ -526,6 +526,10 @@ def json_result_image(text: str, media: list[str]) -> dict:
     return {"text": text, "mode": "image", "media": list(media)}
 
 
+def json_result_pdf(text: str, source: str, pages: int) -> dict:
+    return {"text": text, "mode": "pdf", "media": [source], "pages": pages}
+
+
 def json_result_video(text: str, frameset, title: str = "", source: str = "") -> dict:
     result = {
         "text": text,
@@ -652,6 +656,30 @@ def analyze_images(args) -> None:
     print(result, flush=True)
 
 
+def analyze_pdf(spec, label: str, args) -> None:
+    """Analyze a rasterized PDF: each page becomes one image in a multi-image
+    request (description or verbatim transcription)."""
+    pages = spec.pages or []
+    if not pages:
+        raise RuntimeError("PDF rasterization produced no pages.")
+    if spec.truncated:
+        print(f"[vision] PDF exceeds the {config.max_pdf_pages()}-page cap; "
+              f"only the first {len(pages)} pages were analyzed.", file=sys.stderr)
+    b64_list = [media.image_to_b64(p, args.crop, args.size) for p in pages]
+    if args.transcribe:
+        prompt = build_image_transcribe_prompt(len(b64_list), args.context, args.prompt)
+    else:
+        prompt = build_image_prompt(len(b64_list), args.context,
+                                    args.prompt or "Describe this document page by page, "
+                                                   "including all visible text and UI elements.")
+    result = ask_model(prompt, b64_list, args.mode)
+    warn_encoding_if_suspicious(result, label)
+    if args.json:
+        print_json(json_result_pdf(result, label, len(pages)))
+        return
+    print(result, flush=True)
+
+
 @contextlib.contextmanager
 def _ffmpeg_headers_scope():
     """Restore VISION_FFMPEG_HEADERS to its prior value when the block exits.
@@ -679,6 +707,9 @@ def analyze_video(arg: str, args) -> None:
         return
     if spec.kind == "audio":
         raise RuntimeError("Pure audio: use --mode audio")
+    if spec.kind == "pdf":
+        analyze_pdf(spec, arg, args)
+        return
     media_arg = spec.path if spec.path is not None else "-"
     if not media_arg:
         raise RuntimeError("Resolved to a video but no playable video stream is available.")

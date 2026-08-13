@@ -6,6 +6,7 @@
 ## 功能
 
 - 图片理解、OCR 和逐字转录。
+- PDF 逐页光栅化用于文档 OCR/分析（poppler `pdftoppm`）。
 - 视频场景采样、联系表、时间窗口分析和字幕提取。
 - 可选 FunASR 语音转文字，支持时间戳。
 - Windows 屏幕与剪贴板捕获。
@@ -14,7 +15,8 @@
 
 ## 快速开始
 
-需要 Python 3.10+、Ollama 和 ffmpeg。语音识别与视频网站解析是可选功能。
+需要 Python 3.10+、Ollama 和 ffmpeg。语音识别、视频网站解析和 PDF
+光栅化（poppler-utils `pdftoppm`）是可选功能。
 
 ```bash
 git clone https://github.com/Scheme0/local-agent-senses.git
@@ -24,6 +26,7 @@ ollama pull qwen3.5:4b
 python vision.py --check
 python vision.py photo.png --prompt "详细描述这张图片"
 python vision.py document.png --mode text --transcribe
+python vision.py paper.pdf --transcribe
 python vision.py clip.mp4 --mode scenes --prompt "按时间列出每个场景"
 ```
 

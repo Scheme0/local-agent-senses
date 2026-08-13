@@ -20,6 +20,7 @@ explicitly configure an OpenAI-compatible endpoint.
 ## Features
 
 - Image understanding and verbatim OCR/transcription.
+- PDF page rasterization for document OCR/analysis (poppler `pdftoppm`).
 - Video sampling for scenes, contact sheets, time windows and subtitles.
 - Optional FunASR speech-to-text with timestamps.
 - Windows screen and clipboard capture, plus platform adapters.
@@ -30,8 +31,9 @@ explicitly configure an OpenAI-compatible endpoint.
 
 ## Quick start
 
-Requirements: Python 3.10+, Ollama, and ffmpeg. Speech and video-site URL
-resolution are optional extras.
+Requirements: Python 3.10+, Ollama, and ffmpeg. Speech, video-site URL
+resolution, and PDF rasterization (poppler-utils `pdftoppm`) are optional
+extras.
 
 ```bash
 git clone https://github.com/Scheme0/local-agent-senses.git
@@ -41,6 +43,7 @@ ollama pull qwen3.5:4b
 python vision.py --check
 python vision.py photo.png --prompt "Describe this image"
 python vision.py document.png --mode text --transcribe
+python vision.py paper.pdf --transcribe
 python vision.py clip.mp4 --mode scenes --prompt "List each scene"
 ```
 
@@ -120,6 +123,8 @@ Set limits in `vision-config.json` or with environment variables:
 |---|---:|---|
 | `VISION_MAX_IMAGE_MB` | 20 | Image size cap |
 | `VISION_MAX_STDIN_MB` | 2000 | Piped stdin media cap |
+| `VISION_MAX_PDF_PAGES` | 50 | PDF page cap (0 = all) |
+| `VISION_PDF_DPI` | 150 | PDF rasterization DPI |
 | `VISION_MAX_DOWNLOAD_MB` | 500 | Unknown/remote media cap |
 | `VISION_MAX_DURATION_H` | 6 | Audio/video duration cap |
 | `VISION_MCP_CACHE` | false | Persist MCP results to disk |

@@ -18,10 +18,11 @@ VIDEO_EXTS = {
     ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".wmv", ".ts", ".m3u8",
     ".flv", ".3gp", ".mpg", ".mpeg", ".ogv", ".vob", ".rmvb", ".asf",
 }
+DOCUMENT_EXTS = {".pdf"}
 
 # Direct-link suffixes: the yt-dlp resolver skips these URLs so it never
 # hijacks plain media links.
-DIRECT_MEDIA_SUFFIXES = tuple(sorted(IMAGE_EXTS | AUDIO_EXTS | VIDEO_EXTS))
+DIRECT_MEDIA_SUFFIXES = tuple(sorted(IMAGE_EXTS | AUDIO_EXTS | VIDEO_EXTS | DOCUMENT_EXTS))
 
 
 def is_native_image(head: bytes) -> bool:
@@ -36,6 +37,8 @@ def is_native_image(head: bytes) -> bool:
 # `check_offset` must be one of the listed values (RIFF container subtype or
 # ISO-BMFF brand). Entries are evaluated in order.
 _SIGNATURES = (
+    # documents
+    ("pdf", 0, b"%PDF", None, None),                       # PDF
     # images
     ("image", 0, b"\xff\xd8\xff", None, None),               # JPEG
     ("image", 0, b"\x89PNG\r\n\x1a\n", None, None),          # PNG
@@ -74,8 +77,8 @@ def _match(head: bytes, sig: tuple) -> bool:
 
 
 def sniff_head(head: bytes) -> str:
-    """Classify a buffer as image / audio / video by magic bytes (unknown
-    defaults to video)."""
+    """Classify a buffer as pdf / image / audio / video by magic bytes
+    (unknown defaults to video)."""
     for sig in _SIGNATURES:
         if _match(head, sig):
             return sig[0]

@@ -1,6 +1,6 @@
 ---
 name: vision
-description: Locally-runnable multimodal vision & speech for text-only LLM agents (Codex, Claude Code, Cursor, Cline, Gemini CLI, etc.). Use when the user asks to read, analyze, transcribe, or summarize images, screenshots, charts, UI captures, videos, subtitles, audio, or media URLs — or when image input fails with "does not support image inputs" / "image content omitted". Runs locally by default via Ollama (GLM-4.6V-Flash for verbatim OCR, Qwen3.5-4B for quick image/video understanding) and FunASR speech; no API keys required and nothing is uploaded in local mode (an optional OpenAI-compatible endpoint can be configured). Text-heavy media defaults to verbatim transcription (no summary/judgment; the main model does analysis). 中文说明见正文。
+description: Locally-runnable multimodal vision & speech for text-only LLM agents (Codex, Claude Code, Cursor, Cline, Gemini CLI, etc.). Use when the user asks to read, analyze, transcribe, or summarize images, screenshots, PDFs, charts, UI captures, videos, subtitles, audio, or media URLs — or when image input fails with "does not support image inputs" / "image content omitted". Runs locally by default via Ollama (GLM-4.6V-Flash for verbatim OCR, Qwen3.5-4B for quick image/video understanding) and FunASR speech; no API keys required and nothing is uploaded in local mode (an optional OpenAI-compatible endpoint can be configured). Text-heavy media defaults to verbatim transcription (no summary/judgment; the main model does analysis). 中文说明见正文。
 ---
 
 # vision（本地多模态辅助）
@@ -33,10 +33,12 @@ URL 直接流式读取（ffmpeg 带请求头），都不写临时文件；只有
 支持字段：`speech_python`、`speech_env`、`ollama_exe`、`ffmpeg`、`font`，以及
 `text_model`、`quick_model`、`ollama_host`、`keep_alive`、`max_tokens`、
 `quick_max_tokens`、`quick_think`、`single_resident`、`budget_pixels`、
-`max_download_mb`、`max_duration_h`、`max_image_mb`、`max_stdin_mb`、`mcp_cache`、
+`max_download_mb`、`max_duration_h`、`max_image_mb`、`max_stdin_mb`、`max_pdf_pages`、
+`pdf_dpi`、`mcp_cache`、
 `mcp_cache_dir`、`ollama_models`、`api_base`、`api_key`（完整说明见 README）。
-可选的 `yt_dlp` 字段（或 `VISION_YTDLP`）用于指定 yt-dlp 可执行文件路径。
-对应的环境变量覆盖：`VISION_SPEECH_PYTHON`、`VISION_SPEECH_ENV`、`OLLAMA_EXE`、`VISION_FFMPEG`、`VISION_FONT`。
+可选的 `yt_dlp` 字段（或 `VISION_YTDLP`）用于指定 yt-dlp 可执行文件路径；
+`pdf_renderer`（或 `VISION_PDF_RENDERER`）指定 pdftoppm 路径（PDF 光栅化）。
+对应的环境变量覆盖：`VISION_SPEECH_PYTHON`、`VISION_SPEECH_ENV`、`OLLAMA_EXE`、`VISION_FFMPEG`、`VISION_FONT`、`VISION_PDF_RENDERER`。
 
 ## 核心分工：转录交给视觉模型，理解交给主模型
 
@@ -73,6 +75,8 @@ image, strictly following these rules:
 | 输入 | 做法 |
 |---|---|
 | 本地图片 | `python vision.py <路径> --prompt "问题"` |
+| 本地 PDF | `python vision.py <路径> --transcribe`（逐页光栅化为图片后转录，需 poppler 的 pdftoppm） |
+| PDF URL / stdin | 同上，直接传 URL 或 `-`，`%PDF` 魔数自动识别 |
 | 图片 URL | 同上，直接传 URL，脚本内存流下载 |
 | 多张图片 | `python vision.py <图1> <图2> ... --prompt "对比这两张"` |
 | 本地视频 | 传路径，默认自动模式（≤60s 用 skim，更长用 contact 拼图） |

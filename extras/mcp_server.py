@@ -33,7 +33,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.4.6"
+SERVER_VERSION = "0.5.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 if str(ROOT) not in sys.path:

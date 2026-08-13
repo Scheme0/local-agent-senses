@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-13
+
+### Added
+
+- PDF rasterization via poppler `pdftoppm`: PDF files, URLs, and stdin are
+  detected (`%PDF` magic / `.pdf` extension) and rendered page-by-page to PNG
+  before being sent to the vision model as a multi-image request. Configure the
+  renderer with `VISION_PDF_RENDERER` / `pdf_renderer`, and cap work with
+  `VISION_MAX_PDF_PAGES` (default 50) and `VISION_PDF_DPI` (default 150).
+
 ## [0.4.6] - 2026-08-13
 
 ### Fixed

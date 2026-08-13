@@ -219,3 +219,94 @@ def test_read_stdin_aborts_early_when_over_cap(monkeypatch):
     except RuntimeError as e:
         assert "stdin limit" in str(e)
         assert buf._pos < len(payload)  # aborted before draining stdin
+
+
+def test_sniff_pdf_magic():
+    assert media.sniff_bytes(b"%PDF-1.4 abc") == "pdf"
+    assert media.sniff_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8) == "image"
+
+
+def _fake_pdf_tmpdir(monkeypatch, base: Path):
+    """Mock tempfile.TemporaryDirectory to yield a Path.mkdir dir (the real
+    mkdtemp uses mode 0o700, which some sandboxed environments block)."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm(**kwargs):
+        d = base / "pdftmp"
+        d.mkdir(parents=True, exist_ok=True)
+        yield d
+
+    monkeypatch.setattr(media.tempfile, "TemporaryDirectory", _cm)
+
+
+def test_resolve_input_local_pdf_rasterizes(monkeypatch):
+    base = ROOT / "tests" / ".tmp" / "pdf-resolve"
+    base.mkdir(parents=True, exist_ok=True)
+    p = base / "doc.pdf"
+    p.write_bytes(b"%PDF-1.7\nfake")
+    monkeypatch.setattr(media, "_rasterized_pdf",
+                        lambda source, data, path=None: media.MediaSpec(
+                            kind="pdf", source=source, path=path, data=data,
+                            pages=[b"page"], truncated=False))
+    spec = media.resolve_input(str(p))
+    assert spec.kind == "pdf"
+    assert spec.pages == [b"page"]
+
+
+def test_pdf_renderer_exe_missing(monkeypatch):
+    monkeypatch.setattr(media.config, "env", lambda name, default="": "")
+    monkeypatch.setattr(media.config, "cfg_value", lambda key: "")
+    monkeypatch.setattr(media.shutil, "which", lambda name: None)
+    try:
+        media._pdf_renderer_exe()
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as e:
+        assert "pdftoppm" in str(e)
+
+
+class _FakeProc:
+    returncode = 0
+    stderr = b""
+
+
+def test_rasterize_pdf_renders_pages_in_order(monkeypatch):
+    base = ROOT / "tests" / ".tmp" / "pdf-render"
+    base.mkdir(parents=True, exist_ok=True)
+    _fake_pdf_tmpdir(monkeypatch, base)
+    monkeypatch.setattr(media.config, "TEMP_DIR", base)
+    monkeypatch.setattr(media.config, "max_pdf_pages", lambda: 50)
+    monkeypatch.setattr(media.config, "pdf_dpi", lambda: 150)
+    monkeypatch.setattr(media, "_pdf_renderer_exe", lambda: "pdftoppm")
+
+    def fake_run(cmd, capture_output=True, timeout=600):
+        prefix = Path(cmd[-1])
+        for n in (1, 2):
+            (prefix.parent / f"{prefix.name}-{n}.png").write_bytes(f"PAGE{n}".encode())
+        return _FakeProc()
+
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    pages, truncated = media.rasterize_pdf(b"%PDF-fake")
+    assert pages == [b"PAGE1", b"PAGE2"]
+    assert truncated is False
+
+
+def test_rasterize_pdf_truncates_over_cap(monkeypatch):
+    base = ROOT / "tests" / ".tmp" / "pdf-render"
+    base.mkdir(parents=True, exist_ok=True)
+    _fake_pdf_tmpdir(monkeypatch, base)
+    monkeypatch.setattr(media.config, "TEMP_DIR", base)
+    monkeypatch.setattr(media.config, "max_pdf_pages", lambda: 1)
+    monkeypatch.setattr(media.config, "pdf_dpi", lambda: 150)
+    monkeypatch.setattr(media, "_pdf_renderer_exe", lambda: "pdftoppm")
+
+    def fake_run(cmd, capture_output=True, timeout=600):
+        prefix = Path(cmd[-1])
+        for n in (1, 2):
+            (prefix.parent / f"{prefix.name}-{n}.png").write_bytes(f"PAGE{n}".encode())
+        return _FakeProc()
+
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    pages, truncated = media.rasterize_pdf(b"%PDF")
+    assert truncated is True
+    assert pages == [b"PAGE1"]

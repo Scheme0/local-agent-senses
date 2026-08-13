@@ -145,6 +145,17 @@ def max_stdin_mb() -> int:
     return _cfg_int("VISION_MAX_STDIN_MB", "max_stdin_mb", 2000)
 
 
+def max_pdf_pages() -> int:
+    """Maximum PDF pages rasterized in one call (0 disables the cap)."""
+    return _cfg_int("VISION_MAX_PDF_PAGES", "max_pdf_pages", 50)
+
+
+def pdf_dpi() -> int:
+    """Rasterization resolution for PDF pages (px per inch)."""
+    dpi = _cfg_int("VISION_PDF_DPI", "pdf_dpi", 150)
+    return max(72, min(dpi, 300))
+
+
 def mcp_cache_enabled() -> bool:
     """Persist MCP results on disk across server restarts."""
     return _cfg_bool("VISION_MCP_CACHE", "mcp_cache", False)

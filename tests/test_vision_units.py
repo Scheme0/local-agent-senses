@@ -200,3 +200,25 @@ def test_analyze_audio_rejects_image_input(monkeypatch):
         raise AssertionError("expected RuntimeError")
     except RuntimeError as e:
         assert "is an image" in str(e)
+
+
+def test_ffmpeg_headers_scope_restores_previous(monkeypatch):
+    monkeypatch.setenv("VISION_FFMPEG_HEADERS", '{"User-Agent": "orig"}')
+    with vision._ffmpeg_headers_scope():
+        os.environ["VISION_FFMPEG_HEADERS"] = '{"Referer": "x"}'
+        assert os.environ["VISION_FFMPEG_HEADERS"] == '{"Referer": "x"}'
+    assert os.environ["VISION_FFMPEG_HEADERS"] == '{"User-Agent": "orig"}'
+
+
+def test_ffmpeg_headers_scope_clears_when_absent(monkeypatch):
+    monkeypatch.delenv("VISION_FFMPEG_HEADERS", raising=False)
+    with vision._ffmpeg_headers_scope():
+        os.environ["VISION_FFMPEG_HEADERS"] = '{"Referer": "x"}'
+    assert "VISION_FFMPEG_HEADERS" not in os.environ
+
+
+def test_ffmpeg_headers_scope_preserves_absent(monkeypatch):
+    monkeypatch.delenv("VISION_FFMPEG_HEADERS", raising=False)
+    with vision._ffmpeg_headers_scope():
+        pass
+    assert "VISION_FFMPEG_HEADERS" not in os.environ

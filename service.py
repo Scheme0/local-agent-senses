@@ -99,7 +99,10 @@ def execute(tool: str, args: dict) -> str:
                     raise RuntimeError("Vision backend is not available")
                 code = vision.run_health_check()
                 if code:
-                    raise RuntimeError("Vision health check failed")
+                    summary = "\n".join(
+                        x for x in (out.getvalue().strip(), err.getvalue().strip()) if x)
+                    raise RuntimeError("Vision health check failed"
+                                       + (f":\n{summary}" if summary else ""))
                 return out.getvalue().strip()
 
             if not vision.ensure_ollama_started():

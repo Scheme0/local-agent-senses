@@ -187,3 +187,35 @@ def test_fetch_url_bytes_zero_cap_is_unlimited(monkeypatch):
         raise AssertionError("expected RuntimeError")
     except RuntimeError as e:
         assert "size cap" in str(e)
+
+
+def test_read_stdin_aborts_early_when_over_cap(monkeypatch):
+    payload = b"\x00" * (3 * 1024 * 1024)  # 3 MB
+
+    class _Buf:
+        def __init__(self, data):
+            self._data = data
+            self._pos = 0
+
+        def read(self, n=-1):
+            if self._pos >= len(self._data):
+                return b""
+            end = min(len(self._data), self._pos + max(n, 1))
+            out = self._data[self._pos:end]
+            self._pos = end
+            return out
+
+    class _Stdin:
+        def __init__(self, buf):
+            self.buffer = buf
+
+    buf = _Buf(payload)
+    monkeypatch.setattr(sys, "stdin", _Stdin(buf))
+    monkeypatch.setattr(media, "_STDIN_BUFFER", None)
+    monkeypatch.setenv("VISION_MAX_STDIN_MB", "1")
+    try:
+        media.read_stdin()
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as e:
+        assert "stdin limit" in str(e)
+        assert buf._pos < len(payload)  # aborted before draining stdin

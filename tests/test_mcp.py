@@ -264,3 +264,17 @@ def test_mcp_disk_cache_write_is_atomic(monkeypatch):
     path = mod._disk_path(key)
     assert path is not None and path.exists()
     assert not list(path.parent.glob("*.tmp"))
+
+
+def test_mcp_transcribe_forwards_full_option_set():
+    mod = _load_mcp_module()
+    captured = []
+    mod.run_service = lambda tool, args: captured.append((tool, args)) or "{}"
+    mod.call_tool("transcribe", {
+        "media": "a.mp4", "prompt": "p", "context": "c", "crop": "1x1+0+0",
+        "size": "small", "max_frames": 8, "band": "top", "no_dedupe": True,
+    })
+    assert captured == [("transcribe", {
+        "media": "a.mp4", "prompt": "p", "context": "c", "crop": "1x1+0+0",
+        "size": "small", "max_frames": 8, "band": "top", "no_dedupe": True,
+    })]

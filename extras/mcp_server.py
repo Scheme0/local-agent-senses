@@ -33,7 +33,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.4.5"
+SERVER_VERSION = "0.4.6"
 PROTOCOL_VERSION = "2024-11-05"
 
 if str(ROOT) not in sys.path:
@@ -70,6 +70,7 @@ TOOLS = [
                     "description": "Image paths or URLs, at least one",
                 },
                 "prompt": {"type": "string", "description": "Question or instruction"},
+                "context": {"type": "string", "description": "Previous summary (summary chain)"},
                 "crop": {"type": "string", "description": "Optional WxH+X+Y crop"},
                 "size": {"type": "string", "enum": ["full", "small"],
                          "description": "small=320px thumbnail, full=original size"},
@@ -95,6 +96,11 @@ TOOLS = [
                 "max_frames": {"type": "integer",
                                "description": "Frame cap for video transcription "
                                               "(default 48)"},
+                "band": {"type": "string",
+                         "enum": ["bottom", "top", "middle", "full"],
+                         "description": "Text band to read (default bottom)"},
+                "no_dedupe": {"type": "boolean",
+                              "description": "Disable static-frame dedupe"},
             },
             "required": ["media"],
         },
@@ -111,14 +117,18 @@ TOOLS = [
             "properties": {
                 "video": {"type": "string", "description": "Video path / URL"},
                 "prompt": {"type": "string", "description": "Question or instruction"},
+                "context": {"type": "string", "description": "Previous summary (summary chain)"},
                 "mode": {"type": "string",
                          "enum": ["auto", "contact", "scenes", "skim", "window",
                                   "segments", "burst"],
                          "default": "auto"},
                 "from": {"type": "string", "description": "window/burst start, e.g. 1:20"},
                 "to": {"type": "string", "description": "window end"},
+                "duration": {"type": "number", "description": "burst duration in seconds"},
                 "fps": {"type": "number", "description": "Sampling frame rate"},
                 "max_frames": {"type": "integer", "description": "Frame cap"},
+                "no_dedupe": {"type": "boolean",
+                              "description": "Disable static-frame dedupe"},
             },
             "required": ["video"],
         },
@@ -290,7 +300,8 @@ def _call_tool(name: str, args: dict) -> str:
         if not isinstance(prompt, str) or len(prompt) > 20000:
             raise RuntimeError("prompt must be a string no longer than 20000 characters")
         return run_service("describe_image", {"images": images,
-            "prompt": prompt, "crop": args.get("crop"), "size": args.get("size", "full")})
+            "prompt": prompt, "context": args.get("context"),
+            "crop": args.get("crop"), "size": args.get("size", "full")})
 
     if name == "transcribe":
         media = args.get("media")
@@ -300,24 +311,36 @@ def _call_tool(name: str, args: dict) -> str:
             max_frames = int(args["max_frames"])
             if not 1 <= max_frames <= 1000:
                 raise RuntimeError("max_frames must be between 1 and 1000")
-        return run_service("transcribe", {"media": str(media),
-            "max_frames": int(args["max_frames"]) if args.get("max_frames") else None})
+        return run_service("transcribe", {
+            "media": str(media),
+            "prompt": args.get("prompt"),
+            "context": args.get("context"),
+            "crop": args.get("crop"),
+            "size": args.get("size", "full"),
+            "max_frames": int(args["max_frames"]) if args.get("max_frames") else None,
+            "band": args.get("band", "bottom"),
+            "no_dedupe": args.get("no_dedupe", False),
+        })
 
     if name == "analyze_video":
         video = args.get("video")
         if not video:
             raise RuntimeError("video cannot be empty")
         mode = args.get("mode", "auto")
-        for key in ("from", "to", "fps", "max_frames"):
+        for key in ("from", "to", "fps", "max_frames", "duration"):
             if args.get(key) is not None:
                 if key == "fps" and not 0 < float(args[key]) <= 60:
                     raise RuntimeError("fps must be greater than 0 and at most 60")
                 if key == "max_frames" and not 1 <= int(args[key]) <= 1000:
                     raise RuntimeError("max_frames must be between 1 and 1000")
+                if key == "duration" and not 0 < float(args[key]) <= 3600:
+                    raise RuntimeError("duration must be greater than 0 and at most 3600")
         return run_service("analyze_video", {"video": str(video),
-            "prompt": args.get("prompt"), "mode": mode, "from": args.get("from"),
-            "to": args.get("to"), "fps": args.get("fps"),
-            "max_frames": args.get("max_frames")})
+            "prompt": args.get("prompt"), "context": args.get("context"),
+            "mode": mode, "from": args.get("from"), "to": args.get("to"),
+            "duration": args.get("duration"), "fps": args.get("fps"),
+            "max_frames": args.get("max_frames"),
+            "no_dedupe": args.get("no_dedupe", False)})
 
     if name == "transcribe_audio":
         media = args.get("media")

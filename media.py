@@ -120,9 +120,38 @@ def is_url(s: str) -> bool:
 
 
 def read_stdin() -> bytes:
+    """Read all of stdin into memory exactly once.
+
+    The kind-appropriate size cap is enforced as bytes stream in (early
+    abort), so an oversized pipe is rejected before it is fully buffered.
+    """
     global _STDIN_BUFFER
-    if _STDIN_BUFFER is None:
-        _STDIN_BUFFER = sys.stdin.buffer.read()
+    if _STDIN_BUFFER is not None:
+        return _STDIN_BUFFER
+    head = b""
+    while len(head) < 16:
+        chunk = sys.stdin.buffer.read(16 - len(head))
+        if not chunk:
+            break
+        head += chunk
+    kind = formats.sniff_head(head)
+    limit_mb = config.max_image_mb() if kind == "image" else config.max_stdin_mb()
+    limit_bytes = limit_mb * (1 << 20)
+    chunks: list[bytes] = [head] if head else []
+    total = len(head)
+    while True:
+        chunk = sys.stdin.buffer.read(1 << 16)
+        if not chunk:
+            break
+        total += len(chunk)
+        if limit_bytes > 0 and total > limit_bytes:
+            label = ("VISION_MAX_IMAGE_MB / max_image_mb" if kind == "image"
+                     else "VISION_MAX_STDIN_MB / max_stdin_mb")
+            raise RuntimeError(
+                f"Piped media exceeds the {limit_mb} MB stdin limit "
+                f"(set {label} to adjust, or 0 to disable).")
+        chunks.append(chunk)
+    _STDIN_BUFFER = b"".join(chunks)
     return _STDIN_BUFFER
 
 

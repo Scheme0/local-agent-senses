@@ -1,6 +1,6 @@
 ---
 name: vision
-description: Locally-runnable multimodal vision & speech for text-only LLM agents (Codex, Claude Code, Cursor, Cline, Gemini CLI, etc.). Use when the user asks to read, analyze, transcribe, or summarize images, screenshots, PDFs, charts, UI captures, videos, subtitles, audio, or media URLs — or when image input fails with "does not support image inputs" / "image content omitted". Runs locally by default via Ollama (GLM-4.6V-Flash for verbatim OCR, Qwen3.5-4B for quick image/video understanding) and FunASR speech; no API keys required and nothing is uploaded in local mode (an optional OpenAI-compatible endpoint can be configured). Text-heavy media defaults to verbatim transcription (no summary/judgment; the main model does analysis). 中文说明见正文。
+description: Locally-runnable multimodal vision & speech for text-only LLM agents (Codex, Claude Code, Cursor, Cline, Gemini CLI, etc.). Use when the user asks to read, analyze, transcribe, or summarize images, screenshots, charts, UI captures, videos, subtitles, audio, or media URLs — or when image input fails with "does not support image inputs" / "image content omitted". Runs locally by default via Ollama (GLM-4.6V-Flash for verbatim OCR, Qwen3.5-4B for quick image/video understanding) and FunASR speech; no API keys required and nothing is uploaded in local mode (an optional OpenAI-compatible endpoint can be configured). Text-heavy media defaults to verbatim transcription (no summary/judgment; the main model does analysis). 中文说明见正文。
 ---
 
 # vision（本地多模态辅助）

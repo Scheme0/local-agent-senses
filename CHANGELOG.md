@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-08-13
+
+### Fixed
+
+- `VISION_FFMPEG_HEADERS` (per-request site-stream headers) is restored to its
+  prior value after each analysis, so resolved headers no longer leak into
+  later ffmpeg calls in the in-process service facade.
+- `vision_check` through MCP now surfaces the health-check detail on failure
+  instead of a bare "failed" message.
+- Piped stdin media now aborts early while streaming once the kind-appropriate
+  size cap is exceeded, instead of buffering the whole stream before checking.
+- The MCP `transcribe` tool now forwards `prompt` / `context` / `crop` / `size`
+  (previously declared in its schema but silently dropped).
+
+### Changed
+
+- MCP `describe_image` / `analyze_video` / `transcribe` schemas now expose the
+  `context`, `band`, `duration`, and `no_dedupe` options the service facade
+  already supports, so the MCP surface mirrors the CLI.
+- SKILL.md trigger description no longer lists PDFs (rasterization is not yet
+  implemented).
+- `service_max_concurrency` now documents that a value >1 queues admission
+  rather than enabling parallel inference.
+
 ## [0.4.5] - 2026-08-13
 
 ### Added

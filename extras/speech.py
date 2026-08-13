@@ -192,9 +192,8 @@ def main() -> None:
     parser.add_argument("--model", default="sensevoice", choices=["sensevoice", "paraformer"])
     args = parser.parse_args()
     if args.media == "-":
-        _STDIN_BYTES = sys.stdin.buffer.read()
         try:
-            media.check_stdin_size(len(_STDIN_BYTES))
+            _STDIN_BYTES = media.read_stdin()
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)

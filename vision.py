@@ -20,6 +20,7 @@ Design principles:
 
 import argparse
 import base64
+import contextlib
 import json
 import os
 import re
@@ -43,7 +44,7 @@ import media  # noqa: E402
 import ollama_client  # noqa: E402
 import video_plans  # noqa: E402
 
-__version__ = "0.4.5"
+__version__ = "0.4.6"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (
@@ -651,6 +652,26 @@ def analyze_images(args) -> None:
     print(result, flush=True)
 
 
+@contextlib.contextmanager
+def _ffmpeg_headers_scope():
+    """Restore VISION_FFMPEG_HEADERS to its prior value when the block exits.
+
+    Resolved site streams may set per-request headers (signature / referer /
+    user-agent) via this env var before ffmpeg opens the URL. Restoring the
+    prior value on exit prevents those headers from leaking into later ffmpeg
+    calls that have no headers of their own (the in-process service facade
+    runs many such calls in one process).
+    """
+    previous = os.environ.get("VISION_FFMPEG_HEADERS")
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("VISION_FFMPEG_HEADERS", None)
+        else:
+            os.environ["VISION_FFMPEG_HEADERS"] = previous
+
+
 def analyze_video(arg: str, args) -> None:
     spec = media.resolve_input(arg, want="video")
     if spec.kind == "image":
@@ -658,71 +679,72 @@ def analyze_video(arg: str, args) -> None:
         return
     if spec.kind == "audio":
         raise RuntimeError("Pure audio: use --mode audio")
-    if spec.headers:
-        os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
     media_arg = spec.path if spec.path is not None else "-"
     if not media_arg:
         raise RuntimeError("Resolved to a video but no playable video stream is available.")
     max_side = 320 if args.size == "small" else 1600
-    for attempt in range(1, 4):
-        try:
-            info = video_plans.probe(media_arg, input=spec.data)
-            if info["duration"] <= 0:
-                raise RuntimeError("Cannot read video duration; the file may be "
-                                   "corrupted or not a valid video.")
-            enforce_duration_limit(info["duration"], f"Video ({arg})")
-            if args.mode == "auto":
-                if args.transcribe:
-                    mode = "text"  # transcription defaults to the text band, not scene guessing
+    with _ffmpeg_headers_scope():
+        if spec.headers:
+            os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
+        for attempt in range(1, 4):
+            try:
+                info = video_plans.probe(media_arg, input=spec.data)
+                if info["duration"] <= 0:
+                    raise RuntimeError("Cannot read video duration; the file may be "
+                                       "corrupted or not a valid video.")
+                enforce_duration_limit(info["duration"], f"Video ({arg})")
+                if args.mode == "auto":
+                    if args.transcribe:
+                        mode = "text"  # transcription defaults to the text band, not scene guessing
+                    else:
+                        mode = "skim" if info["duration"] <= 60 else "contact"
                 else:
-                    mode = "skim" if info["duration"] <= 60 else "contact"
-            else:
-                mode = args.mode
-            if mode == "window":
-                if args.start is None or args.end is None:
-                    raise RuntimeError("--mode window requires --from and --to")
-                frameset = video_plans.scheme_window(
-                    media_arg, info, args.start, args.end, fps=args.fps or 1.0,
-                    max_frames=args.max_frames or 24, max_side=max_side,
-                    dedupe=not args.no_dedupe, input=spec.data)
-            elif mode == "burst":
-                if args.start is None:
-                    raise RuntimeError("--mode burst requires --from")
-                frameset = video_plans.scheme_burst(
-                    media_arg, info, args.start, duration=args.duration or 3.0,
-                    fps=args.fps or 5.0, max_frames=args.max_frames or 24,
-                    max_side=max_side, input=spec.data)
-            elif mode == "segments":
-                frameset = video_plans.scheme_segments(
-                    media_arg, info, n=args.max_frames or 24, max_side=max_side, input=spec.data)
-            elif mode == "text":
-                frameset = video_plans.scheme_text(
-                    media_arg, info, fps=args.fps or 1.0,
-                    max_frames=args.max_frames or 48, max_side=max_side,
-                    dedupe=not args.no_dedupe, band=args.band, input=spec.data)
-            elif mode == "scenes":
-                frameset = video_plans.scheme_scenes(
-                    media_arg, info, max_frames=args.max_frames or 24,
-                    max_side=max_side, input=spec.data)
-            elif mode == "contact":
-                frameset = video_plans.scheme_contact(
-                    media_arg, info, n=args.max_frames or 24, input=spec.data)
-            else:
-                frameset = video_plans.scheme_skim(
-                    media_arg, info, fps=args.fps or 1.0,
-                    max_frames=args.max_frames or 24, max_side=max_side,
-                    dedupe=not args.no_dedupe, input=spec.data)
-            break
-        except Exception as e:
-            if spec.source != "url" or attempt == 3:
-                raise
-            print(f"[vision] URL stream read failed; re-resolving and retrying "
-                  f"({attempt + 1}/3): {e}",
-                  file=sys.stderr)
-            spec = media.resolve_input(arg, want="video")
-            if spec.headers:
-                os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
-            media_arg = spec.path if spec.path is not None else "-"
+                    mode = args.mode
+                if mode == "window":
+                    if args.start is None or args.end is None:
+                        raise RuntimeError("--mode window requires --from and --to")
+                    frameset = video_plans.scheme_window(
+                        media_arg, info, args.start, args.end, fps=args.fps or 1.0,
+                        max_frames=args.max_frames or 24, max_side=max_side,
+                        dedupe=not args.no_dedupe, input=spec.data)
+                elif mode == "burst":
+                    if args.start is None:
+                        raise RuntimeError("--mode burst requires --from")
+                    frameset = video_plans.scheme_burst(
+                        media_arg, info, args.start, duration=args.duration or 3.0,
+                        fps=args.fps or 5.0, max_frames=args.max_frames or 24,
+                        max_side=max_side, input=spec.data)
+                elif mode == "segments":
+                    frameset = video_plans.scheme_segments(
+                        media_arg, info, n=args.max_frames or 24, max_side=max_side, input=spec.data)
+                elif mode == "text":
+                    frameset = video_plans.scheme_text(
+                        media_arg, info, fps=args.fps or 1.0,
+                        max_frames=args.max_frames or 48, max_side=max_side,
+                        dedupe=not args.no_dedupe, band=args.band, input=spec.data)
+                elif mode == "scenes":
+                    frameset = video_plans.scheme_scenes(
+                        media_arg, info, max_frames=args.max_frames or 24,
+                        max_side=max_side, input=spec.data)
+                elif mode == "contact":
+                    frameset = video_plans.scheme_contact(
+                        media_arg, info, n=args.max_frames or 24, input=spec.data)
+                else:
+                    frameset = video_plans.scheme_skim(
+                        media_arg, info, fps=args.fps or 1.0,
+                        max_frames=args.max_frames or 24, max_side=max_side,
+                        dedupe=not args.no_dedupe, input=spec.data)
+                break
+            except Exception as e:
+                if spec.source != "url" or attempt == 3:
+                    raise
+                print(f"[vision] URL stream read failed; re-resolving and retrying "
+                      f"({attempt + 1}/3): {e}",
+                      file=sys.stderr)
+                spec = media.resolve_input(arg, want="video")
+                if spec.headers:
+                    os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
+                media_arg = spec.path if spec.path is not None else "-"
 
     images = [{"b64": base64.b64encode(f.jpeg).decode("ascii"), "w": f.w, "h": f.h, "t": f.t}
               for f in frameset.frames]
@@ -765,40 +787,41 @@ def analyze_audio(arg: str, args) -> None:
         print(f"[Subtitle track]\n{spec.subtitle_text}")
         print("\n[meta] source=subtitle")
         return
-    if spec.headers:
-        os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
     media_arg = spec.path if spec.path is not None else "-"
     if spec.path is None and spec.data is None:
         raise RuntimeError("Resolved to an audio stream but no playable stream is available.")
-    for attempt in range(1, 4):
-        try:
-            info = video_plans.probe(media_arg, input=spec.data)
-            if info.get("has_subtitle"):
-                subtitle = video_plans.extract_subtitle_text(media_arg, input=spec.data)
-                if subtitle:
-                    if args.json:
-                        print_json(json_result_audio(subtitle, "subtitle"))
+    with _ffmpeg_headers_scope():
+        if spec.headers:
+            os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
+        for attempt in range(1, 4):
+            try:
+                info = video_plans.probe(media_arg, input=spec.data)
+                if info.get("has_subtitle"):
+                    subtitle = video_plans.extract_subtitle_text(media_arg, input=spec.data)
+                    if subtitle:
+                        if args.json:
+                            print_json(json_result_audio(subtitle, "subtitle"))
+                            return
+                        print(f"[Subtitle track]\n{subtitle}")
+                        print("\n[meta] source=subtitle")
                         return
-                    print(f"[Subtitle track]\n{subtitle}")
-                    print("\n[meta] source=subtitle")
-                    return
-            enforce_duration_limit(info["duration"], f"Audio ({arg})")
-            text, fallback = run_speech(media_arg, args.lang, args.asr_model,
-                                        input_bytes=spec.data, echo_stderr=args.json)
-            break
-        except Exception as e:
-            if spec.source != "url" or attempt == 3:
-                raise
-            print(f"[vision] URL audio stream read failed; re-resolving and retrying "
-                  f"({attempt + 1}/3): {e}",
-                  file=sys.stderr)
-            spec = media.resolve_input(arg, want="audio")
-            if spec.headers:
-                os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
-            if spec.path is None and spec.data is None:
-                raise RuntimeError(
-                    "Resolved to an audio stream but no playable stream is available.")
-            media_arg = spec.path if spec.path is not None else "-"
+                enforce_duration_limit(info["duration"], f"Audio ({arg})")
+                text, fallback = run_speech(media_arg, args.lang, args.asr_model,
+                                            input_bytes=spec.data, echo_stderr=args.json)
+                break
+            except Exception as e:
+                if spec.source != "url" or attempt == 3:
+                    raise
+                print(f"[vision] URL audio stream read failed; re-resolving and retrying "
+                      f"({attempt + 1}/3): {e}",
+                      file=sys.stderr)
+                spec = media.resolve_input(arg, want="audio")
+                if spec.headers:
+                    os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
+                if spec.path is None and spec.data is None:
+                    raise RuntimeError(
+                        "Resolved to an audio stream but no playable stream is available.")
+                media_arg = spec.path if spec.path is not None else "-"
     if fallback:
         print("[vision] paraformer found no speech (possibly music); "
               "fell back to SenseVoice",

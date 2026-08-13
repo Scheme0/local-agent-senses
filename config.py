@@ -169,6 +169,12 @@ def service_timeout_sec() -> float:
 
 
 def service_max_concurrency() -> int:
+    """Admission concurrency for the in-process service facade.
+
+    The vision engine writes results through process-global stdout and is
+    single-threaded, so this caps queued admission rather than enabling true
+    parallel inference; a value >1 does not make requests run concurrently.
+    """
     return max(1, _cfg_int("VISION_MAX_CONCURRENCY", "max_concurrency", 1))
 
 

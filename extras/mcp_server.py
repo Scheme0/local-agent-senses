@@ -32,11 +32,9 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parents[1]
-VISION_PY = ROOT / "vision.py"
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.4.2"
+SERVER_VERSION = "0.4.3"
 PROTOCOL_VERSION = "2024-11-05"
-DEFAULT_TIMEOUT = 1800
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -291,12 +289,6 @@ def _call_tool(name: str, args: dict) -> str:
         prompt = args.get("prompt", "Describe these images in detail, including all visible text and UI elements.")
         if not isinstance(prompt, str) or len(prompt) > 20000:
             raise RuntimeError("prompt must be a string no longer than 20000 characters")
-        cmd = list(images) + ["--json", "--prompt",
-                              prompt]
-        if args.get("crop"):
-            cmd += ["--crop", str(args["crop"])]
-        if args.get("size") == "small":
-            cmd += ["--size", "small"]
         return run_service("describe_image", {"images": images,
             "prompt": prompt, "crop": args.get("crop"), "size": args.get("size", "full")})
 
@@ -304,12 +296,10 @@ def _call_tool(name: str, args: dict) -> str:
         media = args.get("media")
         if not media:
             raise RuntimeError("media cannot be empty")
-        cmd = [str(media), "--mode", "text", "--transcribe", "--json"]
         if args.get("max_frames"):
             max_frames = int(args["max_frames"])
             if not 1 <= max_frames <= 1000:
                 raise RuntimeError("max_frames must be between 1 and 1000")
-            cmd += ["--max-frames", str(max_frames)]
         return run_service("transcribe", {"media": str(media),
             "max_frames": int(args["max_frames"]) if args.get("max_frames") else None})
 
@@ -317,21 +307,13 @@ def _call_tool(name: str, args: dict) -> str:
         video = args.get("video")
         if not video:
             raise RuntimeError("video cannot be empty")
-        cmd = [str(video), "--json", "--prompt",
-               str(args.get("prompt", "Describe in chronological order what happens "
-                                      "in this video, including scene changes and "
-                                      "all visible text."))]
         mode = args.get("mode", "auto")
-        if mode != "auto":
-            cmd += ["--mode", str(mode)]
-        for flag, key in (("--from", "from"), ("--to", "to"), ("--fps", "fps"),
-                          ("--max-frames", "max_frames")):
+        for key in ("from", "to", "fps", "max_frames"):
             if args.get(key) is not None:
                 if key == "fps" and not 0 < float(args[key]) <= 60:
                     raise RuntimeError("fps must be greater than 0 and at most 60")
                 if key == "max_frames" and not 1 <= int(args[key]) <= 1000:
                     raise RuntimeError("max_frames must be between 1 and 1000")
-                cmd += [flag, str(args[key])]
         return run_service("analyze_video", {"video": str(video),
             "prompt": args.get("prompt"), "mode": mode, "from": args.get("from"),
             "to": args.get("to"), "fps": args.get("fps"),
@@ -341,9 +323,6 @@ def _call_tool(name: str, args: dict) -> str:
         media = args.get("media")
         if not media:
             raise RuntimeError("media cannot be empty")
-        cmd = [str(media), "--mode", "audio", "--json",
-               "--lang", str(args.get("lang", "auto")),
-               "--asr-model", str(args.get("asr_model", "sensevoice"))]
         return run_service("transcribe_audio", {"media": str(media),
             "lang": args.get("lang", "auto"), "asr_model": args.get("asr_model", "sensevoice")})
 

@@ -208,10 +208,10 @@ def _split_mjpeg(blob: bytes):
 def _scale_dims(width: int, height: int, max_side: int) -> tuple[int, int]:
     if width <= 0 or height <= 0:
         return max_side, max_side
-    if width <= max_side:
+    if width <= max_side and height <= max_side:
         return width, height
-    ratio = max_side / width
-    return max_side, max(2, int(round(height * ratio)))
+    ratio = max_side / max(width, height)
+    return max(2, int(round(width * ratio))), max(2, int(round(height * ratio)))
 
 
 def _crop_dims(width: int, height: int, crop: str | None) -> tuple[int, int]:

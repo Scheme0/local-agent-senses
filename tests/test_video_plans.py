@@ -39,6 +39,7 @@ def test_split_mjpeg_skips_ffd9_inside_marker_payload():
 def test_scale_dims():
     assert vp._scale_dims(640, 480, 1600) == (640, 480)
     assert vp._scale_dims(3200, 1800, 1600) == (1600, 900)
+    assert vp._scale_dims(900, 3200, 1600) == (450, 1600)
     assert vp._scale_dims(0, 0, 1600) == (1600, 1600)
 
 

@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-08-13
+
+### Fixed
+
+- `video_plans._scale_dims` now scales by the longest side, so tall/portrait
+  videos and images are no longer returned at full height when `max_side` is set.
+- `extras/mcp_server.py` no longer constructs unused CLI command lists or keeps
+  stale `VISION_PY` / `DEFAULT_TIMEOUT` constants.
+
+### Changed
+
+- `.gitignore` now ignores `dist-*/` release-verification directories.
+
 ## [0.4.2] - 2026-08-12
 
 ### Fixed

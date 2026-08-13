@@ -43,7 +43,7 @@ import config  # noqa: E402
 import media  # noqa: E402
 import ollama_client  # noqa: E402
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (

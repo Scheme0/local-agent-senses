@@ -6,10 +6,13 @@ tests/.tmp/
 .coverage
 build/
 dist/
+dist-*/
 *.egg-info/
 venv/
 .venv/
 vision-config.json
+# Local-only GitHub submission and release notes
+GITHUB_SUBMISSION_NOTES.md
 # Auto-generated per-agent adapter files (scripts/generate_adapters.py)
 /AGENTS.md
 /CLAUDE.md

@@ -12,8 +12,8 @@ import io
 import json
 import threading
 import time
+from dataclasses import asdict, dataclass
 from types import SimpleNamespace
-from dataclasses import dataclass, asdict
 
 
 @dataclass
@@ -78,8 +78,8 @@ def _args(**values):
 
 def execute(tool: str, args: dict) -> str:
     """Execute one public service operation and return its JSON/text output."""
-    import vision
     import config
+    import vision
 
     out = io.StringIO()
     err = io.StringIO()

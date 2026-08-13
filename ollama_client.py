@@ -5,8 +5,8 @@ OpenAI-compatible protocol (POST {api_base}/chat/completions); otherwise the
 native Ollama API is used.
 """
 
-import functools
 import base64
+import functools
 import json
 import urllib.error
 import urllib.request

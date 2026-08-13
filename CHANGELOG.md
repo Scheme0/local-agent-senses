@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-08-13
+
+### Added
+
+- `pyproject.toml` ruff configuration and a dedicated lint CI job.
+
+### Changed
+
+- Refactored `scheme_skim`, `scheme_window`, and `scheme_text` to share the
+  deduplication / uniform-sampling logic via `_dedupe_and_sample`.
+
 ## [0.4.3] - 2026-08-13
 
 ### Fixed

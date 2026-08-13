@@ -38,12 +38,12 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-import video_plans  # noqa: E402
 import config  # noqa: E402
 import media  # noqa: E402
 import ollama_client  # noqa: E402
+import video_plans  # noqa: E402
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (

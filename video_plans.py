@@ -151,7 +151,7 @@ def extract_subtitle_text(path: str, input: bytes | None = None) -> str | None:
         if len(lines_b) < 3:
             continue
         timing = lines_b[1].strip()
-        content = " ".join(l.strip() for l in lines_b[2:])
+        content = " ".join(line.strip() for line in lines_b[2:])
         if content:
             lines.append(f"[{timing}] {content}")
     return "\n".join(lines) if lines else None
@@ -353,6 +353,23 @@ def _pick_uniform(times, max_frames: int):
     return sorted({min(len(times) - 1, int(i * step)) for i in range(max_frames)})
 
 
+def _dedupe_and_sample(thumbs, max_frames: int, dedupe: bool,
+                       dedupe_threshold: float, min_interval: float) -> tuple[list[float], int]:
+    """Shared post-processing for skim/window/text: dedupe then uniform sample.
+
+    Returns the selected timestamps and the number of raw thumbnails.
+    """
+    times = [t for t, _ in thumbs]
+    frames = [g for _, g in thumbs]
+    if dedupe:
+        keep = _select_by_dedupe(times, frames, dedupe_threshold, min_interval)
+    else:
+        keep = list(range(len(times)))
+    selected = [times[i] for i in keep]
+    chosen = _pick_uniform(selected, max_frames)
+    return [selected[i] for i in chosen], len(thumbs)
+
+
 def _extract_selected(path, times, max_side, input=None, crop=None, fast_threshold=1800):
     """Extract JPEGs for selected timestamps. Uses a single pass for normal
     videos (exact timestamps) and per-frame seek for very long ones."""
@@ -397,17 +414,10 @@ def scheme_skim(path, info, fps=1.0, max_frames=24, max_side=1600,
                 dedupe=True, dedupe_threshold=3.0, min_interval=10.0,
                 input=None) -> FrameSet:
     thumbs = extract_thumbnails(path, fps=fps, input=input)
-    times = [t for t, _ in thumbs]
-    frames = [g for _, g in thumbs]
-    if dedupe:
-        keep = _select_by_dedupe(times, frames, dedupe_threshold, min_interval)
-    else:
-        keep = list(range(len(times)))
-    selected = [times[i] for i in keep]
-    chosen = _pick_uniform(selected, max_frames)
-    times = [selected[i] for i in chosen]
+    times, sampled = _dedupe_and_sample(thumbs, max_frames, dedupe,
+                                        dedupe_threshold, min_interval)
     return _finalize(path, info, times, max_side, "skim",
-                     {"sampled": len(thumbs), "kept": len(times)}, input=input)
+                     {"sampled": sampled, "kept": len(times)}, input=input)
 
 
 def scheme_scenes(path, info, threshold=4.0, max_frames=24, max_side=1600,
@@ -467,15 +477,8 @@ def scheme_window(path, info, start, end, fps=1.0, max_frames=24, max_side=1600,
     if end <= start:
         raise ValueError(f"Invalid time window: from={start:.1f}s to={end:.1f}s")
     thumbs = extract_thumbnails(path, fps=fps, start=start, end=end, input=input)
-    times = [t for t, _ in thumbs]
-    frames = [g for _, g in thumbs]
-    if dedupe:
-        keep = _select_by_dedupe(times, frames, dedupe_threshold, min_interval)
-    else:
-        keep = list(range(len(times)))
-    selected = [times[i] for i in keep]
-    chosen = _pick_uniform(selected, max_frames)
-    times = [selected[i] for i in chosen]
+    times, sampled = _dedupe_and_sample(thumbs, max_frames, dedupe,
+                                        dedupe_threshold, min_interval)
     return _finalize(path, info, times, max_side, "window",
                      {"window": [round(start, 1), round(end, 1)]}, input=input)
 
@@ -534,17 +537,10 @@ def scheme_text(path, info, fps=1.0, max_frames=48, max_side=1600, dedupe=True,
     """
     crop = _band_crop(info["width"], info["height"], band)
     thumbs = extract_thumbnails(path, fps=fps, crop=crop, input=input)
-    times = [t for t, _ in thumbs]
-    frames = [g for _, g in thumbs]
-    if dedupe:
-        keep = _select_by_dedupe(times, frames, dedupe_threshold, min_interval)
-    else:
-        keep = list(range(len(times)))
-    selected = [times[i] for i in keep]
-    chosen = _pick_uniform(selected, max_frames)
-    times = [selected[i] for i in chosen]
+    times, sampled = _dedupe_and_sample(thumbs, max_frames, dedupe,
+                                        dedupe_threshold, min_interval)
     return _finalize(path, info, times, max_side, "text",
-                     {"band": band, "crop": crop, "sampled": len(thumbs),
+                     {"band": band, "crop": crop, "sampled": sampled,
                       "kept": len(times)},
                      input=input, crop=crop)
 

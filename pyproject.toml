@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agent-senses"
-version = "0.4.3"
+version = "0.4.4"
 description = "Fully local multimodal vision & speech for text-only LLM agents (CLI + MCP)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,3 +49,13 @@ scripts = ["agent-adapter.md"]
 
 [tool.setuptools.data-files]
 "share/local-agent-senses" = ["vision-config.example.json"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]

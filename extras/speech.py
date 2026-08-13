@@ -74,7 +74,7 @@ def speech_segments(media: str) -> list[tuple[float, float]]:
     return padded
 
 
-def decode_pcm(media: str, start: float, end: float) -> "numpy.ndarray":
+def decode_pcm(media: str, start: float, end: float) -> "numpy.ndarray":  # noqa: F821
     import numpy as np
 
     args, data = media_spec(media)
@@ -109,10 +109,9 @@ def fmt(seconds: float) -> str:
 
 
 def load_model(model_name: str, lang: str):
+    import torch
     from funasr import AutoModel
     from funasr.utils.postprocess_utils import rich_transcription_postprocess
-
-    import torch
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     if model_name == "paraformer":

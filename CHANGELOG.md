@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-08-13
+
+### Added
+
+- `VISION_MAX_STDIN_MB` / `max_stdin_mb` cap for piped non-image stdin
+  media (default 2000 MB; `0` disables).
+
+### Fixed
+
+- `service.py` serializes its process-global stdout/stderr redirection so the
+  in-process facade is safe to call from concurrent threads.
+- `extras/speech.py` applies the shared SSRF guard and stdin size cap when run
+  standalone.
+
 ## [0.4.4] - 2026-08-13
 
 ### Added

@@ -43,7 +43,7 @@ import media  # noqa: E402
 import ollama_client  # noqa: E402
 import video_plans  # noqa: E402
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (

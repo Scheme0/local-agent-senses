@@ -49,6 +49,7 @@ class ServiceError(RuntimeError):
 
 
 _slots_lock = threading.Lock()
+_io_lock = threading.Lock()
 _slots: threading.BoundedSemaphore | None = None
 _slots_size = 0
 
@@ -77,7 +78,11 @@ def _args(**values):
 
 
 def execute(tool: str, args: dict) -> str:
-    """Execute one public service operation and return its JSON/text output."""
+    """Execute one public service operation and return its JSON/text output.
+
+    vision.py writes results to process-global stdout, so redirection is
+    serialized with _io_lock; the engine itself is single-threaded by design.
+    """
     import config
     import vision
 
@@ -85,7 +90,7 @@ def execute(tool: str, args: dict) -> str:
     err = io.StringIO()
     previous_model = vision.ACTIVE_MODEL
     previous_ctx = vision.CTX_OVERRIDE
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    with _io_lock, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             if tool == "vision_status":
                 return vision.status_text()

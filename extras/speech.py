@@ -23,6 +23,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 import config  # noqa: E402
+import media  # noqa: E402
 import video_plans  # noqa: E402
 
 _STDIN_BYTES: bytes | None = None
@@ -192,8 +193,20 @@ def main() -> None:
     args = parser.parse_args()
     if args.media == "-":
         _STDIN_BYTES = sys.stdin.buffer.read()
+        try:
+            media.check_stdin_size(len(_STDIN_BYTES))
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
     elif args.media.startswith(("http://", "https://")):
-        pass  # ffmpeg reads the URL directly (headers from VISION_FFMPEG_HEADERS)
+        # ffmpeg reads the URL directly (headers from VISION_FFMPEG_HEADERS),
+        # but the URL is still untrusted input: apply the same SSRF guard as
+        # the main vision path before handing it to ffmpeg.
+        try:
+            media.ensure_url_safe(args.media)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
     elif not Path(args.media).exists():
         print(f"Error: file not found: {args.media}", file=sys.stderr)
         sys.exit(1)

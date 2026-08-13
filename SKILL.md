@@ -33,7 +33,7 @@ URL 直接流式读取（ffmpeg 带请求头），都不写临时文件；只有
 支持字段：`speech_python`、`speech_env`、`ollama_exe`、`ffmpeg`、`font`，以及
 `text_model`、`quick_model`、`ollama_host`、`keep_alive`、`max_tokens`、
 `quick_max_tokens`、`quick_think`、`single_resident`、`budget_pixels`、
-`max_download_mb`、`max_duration_h`、`max_image_mb`、`mcp_cache`、
+`max_download_mb`、`max_duration_h`、`max_image_mb`、`max_stdin_mb`、`mcp_cache`、
 `mcp_cache_dir`、`ollama_models`、`api_base`、`api_key`（完整说明见 README）。
 可选的 `yt_dlp` 字段（或 `VISION_YTDLP`）用于指定 yt-dlp 可执行文件路径。
 对应的环境变量覆盖：`VISION_SPEECH_PYTHON`、`VISION_SPEECH_ENV`、`OLLAMA_EXE`、`VISION_FFMPEG`、`VISION_FONT`。
@@ -167,6 +167,7 @@ python "...\vision.py" --check
 - **像素预算**：默认单次 ≤ 2000 万像素，超了自动均匀减帧；`VISION_BUDGET_PIXELS` 可调。
 - **时长上限**：视频/音频超过 6 小时默认拒绝处理（`VISION_MAX_DURATION_H` / `max_duration_h` 可调，`0` 关闭）。
 - **图片大小上限**：本地/stdin 图片超过 20 MB 默认拒绝（`VISION_MAX_IMAGE_MB` / `max_image_mb` 可调）。
+- **管道媒体大小上限**：stdin 传入的非图片媒体（视频/音频）默认 2000 MB 上限（`VISION_MAX_STDIN_MB` / `max_stdin_mb` 可调，`0` 关闭）。
 - **长视频抽帧加速**：超过 30 分钟的视频按 I 帧快速采样（`-skip_frame nokey`），速度大幅提升、帧时间近似。
 - **时间解析**：支持 `90`、`1:30`、`00:01:30`，越界自动钳制，`from>to` 报错。
 - **场景检测失效**：关键帧 <2 或超上限自动退回均匀分段。

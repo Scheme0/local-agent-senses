@@ -11,6 +11,7 @@
   "max_download_mb": 500,
   "max_duration_h": 6,
   "max_image_mb": 20,
+  "max_stdin_mb": 2000,
   "mcp_cache": false,
   "direct_url_stream": false,
   "service_timeout_sec": 1800,

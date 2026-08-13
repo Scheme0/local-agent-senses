@@ -119,6 +119,7 @@ Set limits in `vision-config.json` or with environment variables:
 | Setting | Default | Purpose |
 |---|---:|---|
 | `VISION_MAX_IMAGE_MB` | 20 | Image size cap |
+| `VISION_MAX_STDIN_MB` | 2000 | Piped stdin media cap |
 | `VISION_MAX_DOWNLOAD_MB` | 500 | Unknown/remote media cap |
 | `VISION_MAX_DURATION_H` | 6 | Audio/video duration cap |
 | `VISION_MCP_CACHE` | false | Persist MCP results to disk |

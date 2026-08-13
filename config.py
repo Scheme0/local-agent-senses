@@ -136,6 +136,15 @@ def max_image_mb() -> int:
     return _cfg_int("VISION_MAX_IMAGE_MB", "max_image_mb", 20)
 
 
+def max_stdin_mb() -> int:
+    """Piped stdin non-image media size cap in MB (0 disables the check).
+
+    Stdin video/audio is buffered fully in memory before ffmpeg can probe it,
+    so a separate generous cap guards against unbounded growth.
+    """
+    return _cfg_int("VISION_MAX_STDIN_MB", "max_stdin_mb", 2000)
+
+
 def mcp_cache_enabled() -> bool:
     """Persist MCP results on disk across server restarts."""
     return _cfg_bool("VISION_MCP_CACHE", "mcp_cache", False)

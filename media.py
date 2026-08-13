@@ -186,6 +186,16 @@ def _check_image_size(size: int) -> None:
             f"(set VISION_MAX_IMAGE_MB / max_image_mb to adjust).")
 
 
+def check_stdin_size(size: int) -> None:
+    """Cap piped non-image media; stdin is buffered whole before probing."""
+    limit = config.max_stdin_mb() * (1 << 20)
+    if limit > 0 and size > limit:
+        raise RuntimeError(
+            f"Piped media is {size // (1 << 20)} MB, exceeding the "
+            f"{config.max_stdin_mb()} MB stdin limit "
+            f"(set VISION_MAX_STDIN_MB / max_stdin_mb to adjust, or 0 to disable).")
+
+
 def normalize_image(data: bytes) -> bytes:
     """Ollama natively supports png/jpeg/webp; other raster formats
     (AVIF/TIFF/HEIC, ...) are converted to PNG via ffmpeg."""
@@ -223,6 +233,8 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
         kind = sniff_bytes(data)
         if kind == "image":
             _check_image_size(len(data))
+        else:
+            check_stdin_size(len(data))
         return MediaSpec(kind=kind, source="stdin", data=data)
 
     if is_url(arg):

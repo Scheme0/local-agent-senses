@@ -49,7 +49,7 @@ def test_mcp_initialize_and_tools_list_smoke():
     proc = _run(MCP, input_text=messages)
     responses = [json.loads(line) for line in proc.stdout.splitlines()]
     assert proc.returncode == 0
-    assert responses[0]["result"]["serverInfo"]["version"] == "0.4.4"
+    assert responses[0]["result"]["serverInfo"]["version"] == "0.4.5"
     assert {tool["name"] for tool in responses[1]["result"]["tools"]} >= {
         "describe_image", "analyze_video", "vision_status"
     }

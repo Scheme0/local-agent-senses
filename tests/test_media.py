@@ -116,6 +116,25 @@ def test_stdin_image_over_size_limit_rejected(monkeypatch):
         assert "limit" in str(e)
 
 
+def test_stdin_non_image_over_size_limit_rejected(monkeypatch):
+    monkeypatch.setenv("VISION_MAX_STDIN_MB", "1")
+    monkeypatch.setattr(media, "read_stdin",
+                        lambda: b"\x00" * (2 * 1024 * 1024 + 1))
+    try:
+        media.resolve_input("-", want="video")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as e:
+        assert "stdin limit" in str(e)
+
+
+def test_stdin_size_cap_zero_disables(monkeypatch):
+    monkeypatch.setenv("VISION_MAX_STDIN_MB", "0")
+    payload = b"\x00" * (3 * 1024 * 1024)
+    monkeypatch.setattr(media, "read_stdin", lambda: payload)
+    spec = media.resolve_input("-", want="video")
+    assert spec.source == "stdin" and len(spec.data) == len(payload)
+
+
 def test_url_image_uses_image_size_cap(monkeypatch):
     seen = {}
 

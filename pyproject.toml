@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agent-senses"
-version = "0.5.0"
+version = "0.5.1"
 description = "Fully local multimodal vision & speech for text-only LLM agents (CLI + MCP)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,12 @@ Repository = "https://github.com/Scheme0/local-agent-senses"
 [project.optional-dependencies]
 speech = ["funasr"]
 ytdlp = ["yt-dlp"]
-test = ["pytest>=7"]
+test = [
+    "pytest>=7,<9",
+    "ruff>=0.9,<0.12",
+    "build>=1",
+    "twine>=5",
+]
 
 [project.scripts]
 vision = "vision:main"

@@ -2,6 +2,7 @@
 """Backend message-construction tests: no network access."""
 import base64
 import sys
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -69,3 +70,21 @@ def test_native_chat_raises_when_content_and_thinking_empty(monkeypatch):
         raise AssertionError("expected RuntimeError")
     except RuntimeError:
         pass
+
+
+def test_openai_error_does_not_leak_api_key(monkeypatch):
+    monkeypatch.setattr(config, "api_base",
+                        lambda: "https://api.example.com/v1")
+    monkeypatch.setenv("VISION_API_KEY", "sk-topsecret")
+
+    def boom(req, data=None, method=None, timeout=600):
+        raise urllib.error.HTTPError("https://api.example.com/v1/chat/completions",
+                                     401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(ollama_client.urllib.request, "urlopen", boom)
+    try:
+        ollama_client.openai_api("POST", "/chat/completions", {"model": "x"})
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "sk-topsecret" not in str(exc)
+        assert "Bearer" not in str(exc)

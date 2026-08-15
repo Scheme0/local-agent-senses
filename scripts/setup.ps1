@@ -7,6 +7,8 @@
   Skip the model download (use when models are already present).
 .PARAMETER SkipCheck
   Skip the health check.
+.PARAMETER AllowCheckFailure
+  Continue when the health check fails instead of exiting nonzero.
 .PARAMETER AllAdapters
   Generate adapter files for every known agent tool (default: only detected ones).
 #>
@@ -14,6 +16,7 @@
 param(
     [switch]$SkipModelPull,
     [switch]$SkipCheck,
+    [switch]$AllowCheckFailure,
     [switch]$AllAdapters
 )
 $ErrorActionPreference = "Stop"
@@ -60,9 +63,18 @@ Write-Host "== 3/5 Model download (several GB the first time; use -SkipModelPull
     & $ollama pull qwen3.5:4b
 }
 
-if (-not $SkipCheck) {
+if ($SkipCheck) {
+Write-Host "== 4/5 Health check skipped =="
+} elseif ($AllowCheckFailure) {
+Write-Host "== 4/5 Health check (AllowCheckFailure; failures continue) =="
+    & python (Join-Path $root "vision.py") --check
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARN] health check failed; continuing because -AllowCheckFailure was passed"
+    }
+} else {
 Write-Host "== 4/5 Health check =="
     & python (Join-Path $root "vision.py") --check
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 Write-Host "== 5/5 Agent adapters =="

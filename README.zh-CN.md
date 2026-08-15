@@ -71,13 +71,24 @@ export VISION_MCP_CACHE=1    # Linux/macOS
 HTTP/HTTPS 媒体 URL 会被当作不可信输入。回环地址、私有地址、链路本地地址、
 组播地址、云元数据地址和 NAT64 地址会被阻止，重定向也会重复检查。
 
-默认情况下，远程媒体先由 Python 安全下载，再交给 ffmpeg，避免 ffmpeg 重新
-解析域名造成安全检查失效。可信环境可以显式开启直连：
+> **DNS rebinding 只是被缓解，并未根除。** 标准库下载器解析域名与建立连接是
+> 一步完成的，恶意的 hostname 理论上仍可能在检查与连接之间被重新解析；严格
+> SSRF 场景应把工具放到出口代理 / allowlist 之后。
+
+默认情况下，远程媒体先由 Python 安全下载，再交给 ffmpeg，降低 ffmpeg 重新
+解析域名造成的安全风险。可信环境可以显式开启直连：
 
 ```bash
 set VISION_DIRECT_URL_STREAM=1       # Windows
 export VISION_DIRECT_URL_STREAM=1    # Linux/macOS
 ```
+
+远程 OpenAI 兼容端点（`api_base`）必须使用 https（仅 localhost 允许 http，
+如 `http://localhost:11434`）；无 scheme、带用户名密码的 URL 会被拒绝。
+视频缩略图候选帧有固定硬上限（`MAX_THUMBNAIL_FRAMES`，1200），无法通过配置
+关闭。显式配置的外部工具路径（`VISION_FFMPEG`、`VISION_SPEECH_PYTHON`、
+`OLLAMA_EXE`、`VISION_PDF_RENDERER`、`VISION_YTDLP`）必须是绝对路径且指向
+存在的普通文件。
 
 详细配置和限制请查看英文版 README、`vision-config.example.json`、
 `SECURITY.md` 和 `CHANGELOG.md`。

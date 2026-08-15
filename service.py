@@ -48,6 +48,42 @@ class ServiceError(RuntimeError):
         return {"code": self.code, "message": self.message}
 
 
+class DeadlineExceededError(RuntimeError):
+    """A request's execution deadline passed before the work completed.
+
+    Raised by the vision engine when a stage check sees the deadline has
+    passed, so callers never confuse "timed out in the queue" with "the
+    request hit its execution budget".
+    """
+
+    code = "deadline_exceeded"
+
+
+def _classify_error(exc: Exception) -> str:
+    """Map an unexpected RuntimeError to a stable error code."""
+    code = getattr(exc, "code", None)
+    if code:
+        return code
+    text = str(exc).lower()
+    if "blocked media url" in text or "ssrf" in text or "unsafe" in text:
+        return "security_error"
+    if ("not found" in text
+            and any(k in text for k in ("ffmpeg", "pdftoppm", "yt-dlp", "ollama",
+                                        "speech environment"))):
+        return "dependency_missing"
+    if "cannot connect" in text or "backend" in text or "endpoint" in text:
+        return "backend_unavailable"
+    if "deadline" in text or "time budget" in text:
+        return "deadline_exceeded"
+    if any(k in text for k in ("must be", "invalid", "expected",
+                               "cannot be empty", "is required")):
+        return "invalid_input"
+    if any(k in text for k in ("ffmpeg", "frame extraction", "media", "video",
+                               "image", "probe", "rasteri")):
+        return "media_error"
+    return "service_error"
+
+
 _slots_lock = threading.Lock()
 _io_lock = threading.Lock()
 _slots: threading.BoundedSemaphore | None = None
@@ -71,13 +107,13 @@ def _args(**values):
         "size": "full", "mode": "auto", "transcribe": False, "json": True,
         "start": None, "end": None, "duration": None, "fps": None,
         "max_frames": None, "band": "bottom", "no_dedupe": False,
-        "lang": "auto", "asr_model": "sensevoice",
+        "lang": "auto", "asr_model": "sensevoice", "deadline": None,
     }
     defaults.update(values)
     return SimpleNamespace(**defaults)
 
 
-def execute(tool: str, args: dict) -> str:
+def execute(tool: str, args: dict, deadline=None) -> str:
     """Execute one public service operation and return its JSON/text output.
 
     vision.py writes results to process-global stdout, so redirection is
@@ -113,7 +149,7 @@ def execute(tool: str, args: dict) -> str:
                 images = args["images"]
                 request = _args(media=list(images), prompt=args.get("prompt"),
                                 context=args.get("context"), crop=args.get("crop"),
-                                size=args.get("size", "full"))
+                                size=args.get("size", "full"), deadline=deadline)
                 vision.ACTIVE_MODEL = vision.resolve_model("auto")
                 vision.analyze_images(request)
             elif tool == "transcribe":
@@ -122,7 +158,8 @@ def execute(tool: str, args: dict) -> str:
                                 size=args.get("size", "full"),
                                 max_frames=args.get("max_frames"), transcribe=True,
                                 mode="text", band=args.get("band", "bottom"),
-                                no_dedupe=args.get("no_dedupe", False))
+                                no_dedupe=args.get("no_dedupe", False),
+                                deadline=deadline)
                 vision.ACTIVE_MODEL = vision.resolve_model("text")
                 vision.analyze_video(args["media"], request)
             elif tool == "analyze_video":
@@ -134,12 +171,14 @@ def execute(tool: str, args: dict) -> str:
                                 end=vision.parse_time(end) if end is not None else None,
                                 duration=args.get("duration"), fps=args.get("fps"),
                                 max_frames=args.get("max_frames"),
-                                no_dedupe=args.get("no_dedupe", False))
+                                no_dedupe=args.get("no_dedupe", False),
+                                deadline=deadline)
                 vision.ACTIVE_MODEL = vision.resolve_model(request.mode)
                 vision.analyze_video(args["video"], request)
             elif tool == "transcribe_audio":
                 request = _args(lang=args.get("lang", "auto"),
-                                asr_model=args.get("asr_model", "sensevoice"), mode="audio")
+                                asr_model=args.get("asr_model", "sensevoice"),
+                                mode="audio", deadline=deadline)
                 vision.analyze_audio(args["media"], request)
             else:
                 raise RuntimeError(f"Unknown tool: {tool}")
@@ -156,21 +195,23 @@ def execute(tool: str, args: dict) -> str:
 def execute_result(tool: str, args: dict) -> ServiceResult:
     """Execute a tool and normalize its JSON output into ServiceResult."""
     import config
-    started = time.monotonic()
+    deadline = time.monotonic() + config.service_execution_timeout_sec()
     slot = _service_slot()
-    if not slot.acquire(timeout=config.service_timeout_sec()):
+    if not slot.acquire(timeout=config.service_queue_timeout_sec()):
         raise ServiceError("busy", "Vision service is busy; retry later")
     try:
-        raw = execute(tool, args)
+        raw = execute(tool, args, deadline=deadline)
     except ServiceError:
         raise
+    except DeadlineExceededError as exc:
+        raise ServiceError("deadline_exceeded", str(exc)) from exc
     except RuntimeError as exc:
-        code = "timeout" if "timed out" in str(exc).lower() else "service_error"
-        raise ServiceError(code, str(exc)) from exc
+        raise ServiceError(_classify_error(exc), str(exc)) from exc
     finally:
         slot.release()
-    if time.monotonic() - started > config.service_timeout_sec():
-        raise ServiceError("timeout", "Vision service request exceeded its time budget")
+    if time.monotonic() >= deadline:
+        raise ServiceError("deadline_exceeded",
+                           "Vision service request exceeded its execution time budget")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

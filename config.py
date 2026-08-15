@@ -15,6 +15,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import urllib.parse
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _metadata_version
 from pathlib import Path
 
 DEFAULT_TEXT_MODEL = "haervwe/GLM-4.6V-Flash-9B"
@@ -30,32 +33,68 @@ SPEECH_ENV_PREFERENCES = ("funasr", "speech", "pytorch1")
 SPEECH_LANGS = ("auto", "zh", "en", "yue", "ja", "ko")
 
 
+class ConfigError(RuntimeError):
+    """Raised when a selected config file is invalid."""
+
+
 def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+def package_version() -> str:
+    """Single runtime version source.
+
+    Reads the installed package metadata (what `pip install .` provides) and
+    falls back to an explicit marker when running from a source tree. The CLI
+    and the MCP server both read from here instead of maintaining their own
+    copies.
+    """
+    try:
+        return _metadata_version("local-agent-senses")
+    except PackageNotFoundError:
+        return "0+source"
+
+
 @functools.lru_cache(maxsize=1)
 def user_config() -> dict:
-    """User-level JSON config; VISION_CONFIG overrides the search entirely."""
+    """User-level JSON config; VISION_CONFIG overrides the search entirely.
+
+    A broken config is a hard error, never a silent fallback to defaults:
+    invalid JSON, an unreadable file, or a top-level value that is not an
+    object raises ConfigError. Only a file that does not exist is skipped
+    during the automatic search.
+    """
     explicit = env("VISION_CONFIG")
     if explicit:
-        try:
-            data = json.loads(Path(explicit).read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+        return _read_config(Path(explicit), explicit_label=True)
     candidates = [
         SCRIPT_DIR / "vision-config.json",
         Path.home() / ".config" / "vision" / "config.json",
         Path.home() / ".cc-switch" / "vision-config.json",  # legacy
     ]
     for path in candidates:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except Exception:
+        if not path.exists():
             continue
+        return _read_config(path, explicit_label=False)
     return {}
+
+
+def _read_config(path: Path, explicit_label: bool) -> dict:
+    """Load one config file or raise ConfigError with a readable message."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        if explicit_label:
+            raise ConfigError(f"VISION_CONFIG file not found: {path}") from exc
+        raise ConfigError(f"Config file not found: {path}") from exc
+    except OSError as exc:
+        raise ConfigError(f"Cannot read config file {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"Invalid JSON in {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"Config file {path} must contain a JSON object, "
+                          f"got {type(data).__name__}")
+    return data
 
 
 def cfg_value(key: str) -> str:
@@ -117,9 +156,22 @@ def budget_pixels() -> int:
     return _cfg_int("VISION_BUDGET_PIXELS", "budget_pixels", 20_000_000)
 
 
+# System hard ceilings: setting a limit to 0 (or an absurdly high value) in
+# the user config still cannot disable resource protection entirely.
+HARD_MAX_DOWNLOAD_MB = 8192
+HARD_MAX_PDF_PAGES = 200
+
+
 def max_download_mb() -> int:
     """Size cap for buffered unknown-type URLs in MB (0 disables the cap)."""
     return _cfg_int("VISION_MAX_DOWNLOAD_MB", "max_download_mb", 500)
+
+
+def effective_download_cap_mb() -> int:
+    """Download cap with the system hard ceiling applied; 0 or an over-large
+    configured value still resolves to the hard ceiling."""
+    cap = max_download_mb()
+    return cap if 0 < cap < HARD_MAX_DOWNLOAD_MB else HARD_MAX_DOWNLOAD_MB
 
 
 def max_duration_h() -> float:
@@ -150,6 +202,13 @@ def max_pdf_pages() -> int:
     return _cfg_int("VISION_MAX_PDF_PAGES", "max_pdf_pages", 50)
 
 
+def effective_pdf_pages() -> int:
+    """PDF page budget with the system hard ceiling applied; 0 or an
+    over-large configured value still resolves to the hard ceiling."""
+    cap = max_pdf_pages()
+    return cap if 0 < cap < HARD_MAX_PDF_PAGES else HARD_MAX_PDF_PAGES
+
+
 def pdf_dpi() -> int:
     """Rasterization resolution for PDF pages (px per inch)."""
     dpi = _cfg_int("VISION_PDF_DPI", "pdf_dpi", 150)
@@ -172,7 +231,33 @@ def direct_url_streaming() -> bool:
 
 
 def service_timeout_sec() -> float:
+    """Legacy single-budget timeout; kept as the default for both the queue
+    and the execution timeout below."""
     raw = env("VISION_SERVICE_TIMEOUT", "") or cfg_value("service_timeout_sec")
+    try:
+        return max(0.1, float(raw)) if raw else 1800.0
+    except ValueError:
+        return 1800.0
+
+
+def service_queue_timeout_sec() -> float:
+    """How long a request waits in the admission queue before failing as busy."""
+    raw = (env("VISION_SERVICE_QUEUE_TIMEOUT")
+           or env("VISION_SERVICE_TIMEOUT")
+           or cfg_value("service_queue_timeout_sec")
+           or cfg_value("service_timeout_sec"))
+    try:
+        return max(0.1, float(raw)) if raw else 1800.0
+    except ValueError:
+        return 1800.0
+
+
+def service_execution_timeout_sec() -> float:
+    """Execution budget for one in-flight request (deadline for stage checks)."""
+    raw = (env("VISION_SERVICE_EXECUTION_TIMEOUT")
+           or env("VISION_SERVICE_TIMEOUT")
+           or cfg_value("service_execution_timeout_sec")
+           or cfg_value("service_timeout_sec"))
     try:
         return max(0.1, float(raw)) if raw else 1800.0
     except ValueError:
@@ -196,8 +281,76 @@ def mcp_cache_dir() -> str:
 
 def api_base() -> str:
     """OpenAI-compatible endpoint (e.g. Ollama /v1, Zhipu, DashScope);
-    empty means local Ollama."""
-    return (env("VISION_API_BASE") or cfg_value("api_base") or "").rstrip("/")
+    empty means local Ollama. Invalid or unsafe endpoints raise ConfigError."""
+    value = (env("VISION_API_BASE") or cfg_value("api_base") or "").rstrip("/")
+    validate_api_base(value)
+    return value
+
+
+def validate_api_base(url: str) -> None:
+    """Enforce safe endpoint rules for api_base.
+
+    - empty string is allowed (local Ollama mode)
+    - http is only allowed for localhost/loopback (http://localhost / 127.0.0.1)
+    - every other endpoint must use https
+    - a missing scheme, embedded credentials, or an unparseable URL raise
+      ConfigError; error messages never include the API key.
+    """
+    if not url:
+        return
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError as exc:
+        raise ConfigError(f"Invalid api_base URL: {url}") from exc
+    if not parsed.scheme:
+        raise ConfigError("api_base must include a scheme (http:// or https://)")
+    if parsed.scheme not in ("http", "https"):
+        raise ConfigError(f"Unsupported api_base scheme '{parsed.scheme}'; "
+                          "use http://localhost or https://")
+    if parsed.username or parsed.password:
+        raise ConfigError("api_base must not contain embedded credentials")
+    host = parsed.hostname
+    if not host:
+        raise ConfigError("api_base has no host")
+    if parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"):
+        raise ConfigError(
+            "HTTP api_base is only allowed for localhost "
+            "(e.g. http://localhost:11434); use https:// for remote endpoints")
+
+
+def validate_external_tool(path: str, label: str) -> list[str]:
+    """Basic security checks for an explicitly configured external tool path.
+
+    Hard failures (empty, non-absolute, missing, not a regular file) raise
+    ConfigError; softer concerns (permissions, user-writable directory,
+    unexpected extension) are returned as warning strings for callers that
+    want to surface them.
+    """
+    if not path:
+        raise ConfigError(f"{label} path is empty")
+    p = Path(path)
+    if not p.is_absolute():
+        raise ConfigError(f"{label} must be an absolute path: {path}")
+    if not p.exists():
+        raise ConfigError(f"{label} not found: {path}")
+    if not p.is_file():
+        raise ConfigError(f"{label} is not a regular file: {path}")
+    issues: list[str] = []
+    if os.name != "nt":
+        try:
+            if p.stat().st_mode & 0o022:
+                issues.append(f"{label} is writable by group/other users: {path}")
+        except OSError:
+            pass
+    else:
+        if p.suffix.lower() not in (".exe", ".com", ".bat", ".cmd", ".ps1", ".py", ""):
+            issues.append(f"{label} has an unexpected extension: {path}")
+        try:
+            if os.access(p.parent, os.W_OK):
+                issues.append(f"{label} lives in a user-writable directory: {path}")
+        except OSError:
+            pass
+    return issues
 
 
 def api_key() -> str:
@@ -223,6 +376,7 @@ def speech_python() -> str:
     """
     explicit = env("VISION_SPEECH_PYTHON") or cfg_value("speech_python")
     if explicit:
+        validate_external_tool(explicit, "VISION_SPEECH_PYTHON")
         return explicit
     env_name = env("VISION_SPEECH_ENV") or cfg_value("speech_env") or DEFAULT_SPEECH_ENV
     exe_name = "python.exe" if os.name == "nt" else "bin/python"
@@ -317,6 +471,7 @@ def ollama_exe() -> str | None:
     """Locate the ollama executable; explicit OLLAMA_EXE / config wins."""
     explicit = env("OLLAMA_EXE") or cfg_value("ollama_exe")
     if explicit:
+        validate_external_tool(explicit, "OLLAMA_EXE")
         return explicit
     candidates = []
     for key, sub in (("LOCALAPPDATA", r"Programs\Ollama\ollama.exe"),

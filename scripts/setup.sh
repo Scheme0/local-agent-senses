@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # local-agent-senses one-click environment setup (Linux/macOS).
 # Usage: bash scripts/setup.sh
-#   SKIP_MODEL_PULL=1 to skip model downloads
-#   SKIP_CHECK=1      to skip the health check (models may be absent)
-#   ALL_ADAPTERS=1    to generate adapters for every known agent tool
+#   SKIP_MODEL_PULL=1   to skip model downloads
+#   SKIP_CHECK=1        to skip the health check (models may be absent)
+#   ALLOW_CHECK_FAILURE=1 to continue even when the health check fails
+#   ALL_ADAPTERS=1      to generate adapters for every known agent tool
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,10 +45,14 @@ if [ "${SKIP_MODEL_PULL:-0}" != "1" ] && [ -n "$OLLAMA" ]; then
 fi
 
 if [ "${SKIP_CHECK:-0}" = "1" ]; then
-  echo "== 4/5 Health check (skipped: SKIP_CHECK=1) =="
+  echo "== 4/5 Health check skipped =="
+elif [ "${ALLOW_CHECK_FAILURE:-0}" = "1" ]; then
+  echo "== 4/5 Health check (ALLOW_CHECK_FAILURE=1; failures continue) =="
+  "$PY" "$ROOT/vision.py" --check || \
+    echo "[WARN] health check failed; continuing because ALLOW_CHECK_FAILURE=1"
 else
   echo "== 4/5 Health check =="
-  "$PY" "$ROOT/vision.py" --check || echo "[WARN] health check failed; continuing"
+  "$PY" "$ROOT/vision.py" --check
 fi
 
 echo "== 5/5 Agent adapters =="

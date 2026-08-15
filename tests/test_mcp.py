@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -278,3 +279,161 @@ def test_mcp_transcribe_forwards_full_option_set():
         "media": "a.mp4", "prompt": "p", "context": "c", "crop": "1x1+0+0",
         "size": "small", "max_frames": 8, "band": "top", "no_dedupe": True,
     })]
+
+
+def _invalid(mod, name, args):
+    try:
+        mod.call_tool(name, args)
+        raise AssertionError(f"expected invalid_input for {name} {args!r}")
+    except mod.MCPInputError as exc:
+        assert exc.code == "invalid_input"
+        return str(exc)
+
+
+def test_mcp_rejects_non_dict_arguments():
+    mod = _load_mcp_module()
+    msg = _invalid(mod, "describe_image", ["a.png"])
+    assert "JSON object" in msg
+
+
+def test_mcp_rejects_non_string_media():
+    mod = _load_mcp_module()
+    _invalid(mod, "transcribe", {"media": 123})
+    _invalid(mod, "analyze_video", {"video": ["a.mp4"]})
+    _invalid(mod, "transcribe_audio", {"media": b"x"})
+
+
+def test_mcp_rejects_empty_media():
+    mod = _load_mcp_module()
+    _invalid(mod, "transcribe", {"media": ""})
+    _invalid(mod, "analyze_video", {"video": "   "})
+
+
+def test_mcp_rejects_overlong_prompt_and_context():
+    mod = _load_mcp_module()
+    long_text = "x" * (mod.MAX_PROMPT_LENGTH + 1)
+    _invalid(mod, "describe_image", {"images": ["a.png"], "prompt": long_text})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "context": long_text})
+
+
+def test_mcp_rejects_non_string_images():
+    mod = _load_mcp_module()
+    _invalid(mod, "describe_image", {"images": "a.png"})
+    _invalid(mod, "describe_image", {"images": [123]})
+    _invalid(mod, "describe_image", {"images": ["ok.png", ""]})
+
+
+def test_mcp_rejects_too_many_images():
+    mod = _load_mcp_module()
+    images = [f"{i}.png" for i in range(mod.MAX_IMAGES + 1)]
+    _invalid(mod, "describe_image", {"images": images})
+
+
+def test_mcp_rejects_nan_infinity_and_negatives():
+    mod = _load_mcp_module()
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "fps": float("nan")})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "fps": float("inf")})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "duration": float("-inf")})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "fps": -1})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "duration": 0})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "fps": 61})
+
+
+def test_mcp_rejects_negative_time_window():
+    mod = _load_mcp_module()
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "from": "-5"})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "from": "1:20", "to": "-3"})
+
+
+def test_mcp_rejects_illegal_mode_without_fallback():
+    mod = _load_mcp_module()
+    msg = _invalid(mod, "analyze_video", {"video": "a.mp4", "mode": "skimmy"})
+    assert "mode" in msg
+
+
+def test_mcp_rejects_illegal_band_lang_asr():
+    mod = _load_mcp_module()
+    _invalid(mod, "transcribe", {"media": "a.mp4", "band": "center"})
+    _invalid(mod, "transcribe_audio", {"media": "a.wav", "lang": "fr"})
+    _invalid(mod, "transcribe_audio", {"media": "a.wav", "asr_model": "whisper"})
+
+
+def test_mcp_rejects_bool_disguised_as_int_and_bad_ranges():
+    mod = _load_mcp_module()
+    _invalid(mod, "transcribe", {"media": "a.mp4", "max_frames": True})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "fps": True})
+    _invalid(mod, "transcribe", {"media": "a.mp4", "max_frames": 0})
+    _invalid(mod, "transcribe", {"media": "a.mp4", "max_frames": 1001})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "max_frames": 1001})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "max_frames": -3})
+
+
+def test_mcp_rejects_non_bool_no_dedupe():
+    mod = _load_mcp_module()
+    _invalid(mod, "transcribe", {"media": "a.mp4", "no_dedupe": "yes"})
+    _invalid(mod, "analyze_video", {"video": "a.mp4", "no_dedupe": 1})
+
+
+def test_mcp_rejects_oversized_media_path():
+    mod = _load_mcp_module()
+    _invalid(mod, "transcribe", {"media": "x" * (mod.MAX_MEDIA_LENGTH + 1)})
+
+
+def test_mcp_validation_error_code_surfaces_in_response(monkeypatch):
+    mod = _load_mcp_module()
+    response = mod.handle_request({
+        "jsonrpc": "2.0", "id": 50, "method": "tools/call",
+        "params": {"name": "analyze_video",
+                   "arguments": {"video": "a.mp4", "mode": "nope"}},
+    })
+    assert response["result"]["isError"] is True
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert payload["code"] == "invalid_input"
+
+
+def test_mcp_cache_key_includes_version_model_and_backend():
+    mod = _load_mcp_module()
+    key = mod._cache_key("describe_image", {"images": ["a.png"]})
+    fields = dict(key[1])
+    assert fields["server_version"] == mod.SERVER_VERSION
+    assert fields["model"]
+    assert fields["backend"] in ("ollama", "openai")
+
+
+def test_mcp_disk_cache_applies_restrictive_permissions(monkeypatch):
+    mod = _load_mcp_module()
+    chmods = []
+    monkeypatch.setattr(mod, "_IS_POSIX", True)
+    monkeypatch.setattr(mod.os, "chmod", lambda path, mode: chmods.append((path, mode)))
+    key = ("describe_image", (("images", ("x.png",)),))
+    mod._disk_write(key, "perm-test")
+    assert any(mode == 0o600 for _, mode in chmods), "cache file must be 0o600"
+    assert any(mode == 0o700 for _, mode in chmods), "cache dir must be 0o700"
+
+
+def test_mcp_disk_cache_skips_oversized_results(monkeypatch):
+    mod = _load_mcp_module()
+    mod.CACHE_MAX_RESULT_BYTES = 10
+    key = ("describe_image", (("images", ("x.png",)),))
+    mod._disk_write(key, "x" * 100)
+    assert not mod._disk_path(key).exists()
+
+
+def test_mcp_disk_cache_read_removes_oversized_files(monkeypatch):
+    mod = _load_mcp_module()
+    key = ("describe_image", (("images", ("x.png",)),))
+    p = mod._disk_path(key)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"ts": %s, "text": "huge"}' % time.time(), encoding="utf-8")
+    mod.CACHE_MAX_FILE_BYTES = 5
+    assert mod._disk_read(key) is None
+    assert not p.exists()
+
+
+def test_mcp_disk_cache_prunes_to_max_files(monkeypatch):
+    mod = _load_mcp_module()
+    mod.CACHE_MAX_FILES = 3
+    for i in range(6):
+        key = ("describe_image", (("images", (f"f{i}.png",)),))
+        mod._disk_write(key, f"entry-{i}")
+    assert len(list(mod._disk_path(("x", ())).parent.glob("*.json"))) <= 3

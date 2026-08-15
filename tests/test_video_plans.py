@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -135,7 +137,8 @@ def test_scheme_skim_dedupes_and_picks_uniform(monkeypatch):
     thumbs = [(float(t), bytes([t % 251]) * (160 * 90)) for t in range(60)]
     monkeypatch.setattr(vp, "extract_thumbnails", lambda *a, **k: thumbs)
     seen = {}
-    def fake_extract(path, times, max_side, input=None, crop=None, fast_threshold=1800):
+    def fake_extract(path, times, max_side, input=None, crop=None,
+                     fast_threshold=1800, start=None, end=None, deadline=None):
         seen["times"] = list(times)
         return [vp.Frame(t=t, jpeg=_jpeg(), w=160, h=90) for t in times]
     monkeypatch.setattr(vp, "_extract_selected", fake_extract)
@@ -195,7 +198,8 @@ def test_scheme_text_uses_band_crop(monkeypatch):
     thumbs = [(float(t), bytes([0]) * (160 * 90)) for t in range(10)]
     monkeypatch.setattr(vp, "extract_thumbnails", lambda *a, **k: thumbs)
     crops = []
-    def fake_extract(path, times, max_side, input=None, crop=None, fast_threshold=1800):
+    def fake_extract(path, times, max_side, input=None, crop=None,
+                     fast_threshold=1800, start=None, end=None, deadline=None):
         crops.append(crop)
         return [vp.Frame(t=t, jpeg=_jpeg(), w=160, h=90) for t in times]
     monkeypatch.setattr(vp, "_extract_selected", fake_extract)
@@ -230,7 +234,7 @@ def test_scheme_burst_delegates_without_dedupe(monkeypatch):
 
 def test_scheme_contact_builds_tile_filter(monkeypatch):
     captured = {}
-    def fake_run_ffmpeg(args, timeout=3600, input=None):
+    def fake_run_ffmpeg(args, timeout=3600, input=None, deadline=None):
         captured["args"] = list(args)
         return 0, _jpeg(), ""
     monkeypatch.setattr(vp, "run_ffmpeg", fake_run_ffmpeg)
@@ -275,9 +279,9 @@ def test_scheme_scenes_fills_static_gaps(monkeypatch):
 
 def test_extract_frame_seek_injects_keyframe_option(monkeypatch):
     captured = {}
-    monkeypatch.setattr(vp, "probe", lambda path, input=None: _info(duration=100.0))
+    monkeypatch.setattr(vp, "probe", lambda path, input=None, deadline=None: _info(duration=100.0))
 
-    def fake_run(args, timeout=180, input=None):
+    def fake_run(args, timeout=180, input=None, deadline=None):
         captured["args"] = list(args)
         return 0, _jpeg(), ""
 
@@ -293,11 +297,13 @@ def test_extract_frame_seek_injects_keyframe_option(monkeypatch):
 def test_extract_selected_uses_single_pass_short_and_keyframes_long(monkeypatch):
     calls = {"all": 0, "seek": []}
 
-    def fake_all(path, fps, max_side, start=None, end=None, crop=None, input=None):
+    def fake_all(path, fps, max_side, start=None, end=None, crop=None, input=None,
+                 deadline=None):
         calls["all"] += 1
         raise RuntimeError("force seek fallback")
 
-    def fake_seek(path, t, max_side, input=None, crop=None, keyframes=False):
+    def fake_seek(path, t, max_side, input=None, crop=None, keyframes=False,
+                  deadline=None):
         calls["seek"].append((t, keyframes))
         return vp.Frame(t=t, jpeg=_jpeg(), w=160, h=90)
 
@@ -321,3 +327,133 @@ def test_run_ffmpeg_timeout_raises_friendly_error(monkeypatch):
         raise AssertionError("expected RuntimeError")
     except RuntimeError as e:
         assert "time limit" in str(e)
+
+
+def test_extract_thumbnails_adds_frame_limit_arg(monkeypatch):
+    captured = {}
+
+    def fake_run(args, timeout=3600, input=None, deadline=None):
+        captured["args"] = list(args)
+        return 0, b"\x05" * (160 * 90 * 2), ""
+
+    monkeypatch.setattr(vp, "run_ffmpeg", fake_run)
+    frames = vp.extract_thumbnails("x.mp4", fps=1.0, max_frames=5)
+    idx = captured["args"].index("-frames:v")
+    assert captured["args"][idx + 1] == "5"
+    # only 2 frames existed in the output; both are kept
+    assert len(frames) == 2
+    assert frames[0][0] == 0.0 and frames[1][0] == 1.0
+
+
+def test_extract_thumbnails_truncates_to_max_frames(monkeypatch):
+    blob = b"\x05" * (160 * 90 * 100)
+    monkeypatch.setattr(vp, "run_ffmpeg", lambda *a, **k: (0, blob, ""))
+    frames = vp.extract_thumbnails("x.mp4", fps=1.0, max_frames=10)
+    assert len(frames) == 10
+
+
+def test_extract_thumbnails_without_limit_keeps_all(monkeypatch):
+    captured = {}
+
+    def fake_run(args, timeout=3600, input=None, deadline=None):
+        captured["args"] = list(args)
+        return 0, b"\x05" * (160 * 90 * 3), ""
+
+    monkeypatch.setattr(vp, "run_ffmpeg", fake_run)
+    frames = vp.extract_thumbnails("x.mp4", fps=1.0)
+    assert len(frames) == 3
+    assert "-frames:v" not in captured["args"]
+
+
+def test_bounded_fps():
+    assert vp._bounded_fps(1.0, 100.0) == 1.0
+    assert vp._bounded_fps(10.0, 100.0) == 10.0
+    assert vp._bounded_fps(2.0, 1000.0) == pytest.approx(1.2)
+    assert vp._bounded_fps(5.0, 1200.0) == 1.0
+    assert vp._bounded_fps(1.0, 2000.0) == pytest.approx(0.6)
+    assert vp._bounded_fps(5.0, None) == 5.0
+    assert vp._bounded_fps(5.0, 0) == 5.0
+    assert vp._bounded_fps(2.0, -1) == 2.0
+
+
+def test_long_video_schemes_use_bounded_fps(monkeypatch):
+    """A 2-hour video must not produce unbounded thumbnail candidates."""
+    info = _info(duration=7200.0)
+    seen = {}
+
+    def fake_thumbs(path, fps=None, max_frames=None, **k):
+        seen["fps"] = fps
+        seen["max_frames"] = max_frames
+        return [(0.0, bytes(160 * 90)), (1.0, bytes(160 * 90))]
+
+    monkeypatch.setattr(vp, "extract_thumbnails", fake_thumbs)
+    monkeypatch.setattr(vp, "_extract_selected",
+                        lambda path, times, max_side, **k:
+                        [vp.Frame(t=t, jpeg=_jpeg(), w=160, h=90) for t in times])
+    vp.scheme_skim("x.mp4", info, fps=1.0, max_frames=5)
+    assert seen["max_frames"] == vp.MAX_THUMBNAIL_FRAMES
+    assert seen["fps"] == pytest.approx(vp.MAX_THUMBNAIL_FRAMES / 7200.0)
+
+
+def test_scheme_window_passes_window_bounds_to_final_extraction(monkeypatch):
+    info = _info(duration=100.0)
+    seen = {}
+
+    def fake_thumbs(path, fps=None, start=None, end=None, **k):
+        seen["thumbs"] = (start, end)
+        seen["fps"] = fps
+        return [(float(t), bytes([0]) * (160 * 90)) for t in range(30)]
+
+    def fake_extract(path, times, max_side, input=None, crop=None,
+                     start=None, end=None, deadline=None):
+        seen["extract"] = (start, end)
+        return [vp.Frame(t=t, jpeg=_jpeg(), w=160, h=90) for t in times]
+
+    monkeypatch.setattr(vp, "extract_thumbnails", fake_thumbs)
+    monkeypatch.setattr(vp, "_extract_selected", fake_extract)
+    fs = vp.scheme_window("x.mp4", info, 10.0, 20.0, fps=1.0, max_frames=5)
+    assert seen["thumbs"] == (10.0, 20.0)
+    assert seen["extract"] == (10.0, 20.0)
+    assert seen["fps"] == 1.0
+    assert fs.meta["window"] == [10.0, 20.0]
+
+
+def test_scheme_window_short_window_does_not_decode_full_video(monkeypatch):
+    """Regression: a 10s window inside a 2h video must bound the ffmpeg pass
+    to the window, not decode the whole file."""
+    info = _info(duration=7200.0)
+    seen = {}
+
+    def fake_thumbs(path, fps=None, start=None, end=None, **k):
+        seen["thumbs"] = (start, end)
+        return [(float(t), bytes([0]) * (160 * 90)) for t in range(10)]
+
+    def fake_extract(path, times, max_side, input=None, crop=None,
+                     start=None, end=None, deadline=None):
+        seen["extract"] = (start, end)
+        return [vp.Frame(t=t, jpeg=_jpeg(), w=160, h=90) for t in times]
+
+    monkeypatch.setattr(vp, "extract_thumbnails", fake_thumbs)
+    monkeypatch.setattr(vp, "_extract_selected", fake_extract)
+    vp.scheme_window("x.mp4", info, 100.0, 110.0, fps=1.0, max_frames=5)
+    assert seen["thumbs"] == (100.0, 110.0)
+    assert seen["extract"] == (100.0, 110.0)
+
+
+def test_scheme_candidates_never_exceed_hard_cap(monkeypatch):
+    """All thumbnail-candidate producers must stay under MAX_THUMBNAIL_FRAMES,
+    even when max_frames is small."""
+    info = _info(duration=10 ** 6)
+    for scheme in (vp.scheme_skim, vp.scheme_scenes, vp.scheme_text):
+        seen = {}
+        def fake_thumbs(path, fps=None, max_frames=None, **k):
+            seen["fps"] = fps
+            seen["max_frames"] = max_frames
+            return [(0.0, bytes(160 * 90))]
+        monkeypatch.setattr(vp, "extract_thumbnails", fake_thumbs)
+        monkeypatch.setattr(vp, "_extract_selected",
+                            lambda path, times, max_side, **k:
+                            [vp.Frame(t=t, jpeg=_jpeg(), w=160, h=90) for t in times])
+        fs = scheme("x.mp4", info, max_frames=5)
+        assert seen["max_frames"] == vp.MAX_THUMBNAIL_FRAMES
+        assert seen["fps"] <= vp.MAX_THUMBNAIL_FRAMES / info["duration"] or len(fs.frames) <= 5

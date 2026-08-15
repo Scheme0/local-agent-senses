@@ -19,10 +19,12 @@
 
 ## 代码约定
 
-- 根目录的 6 个 Python 文件只依赖标准库（视觉路径零第三方依赖）；
+- 根目录的 7 个 Python 文件（`config.py`、`media.py`、`media_formats.py`、
+  `ollama_client.py`、`service.py`、`video_plans.py`、`vision.py`）只依赖标准库
+  （视觉路径零第三方依赖）；
 - `extras/` 是可选模块，删掉不应影响核心功能；
 - 新增环境变量统一在 `config.py` 定义默认值，并在 SKILL.md / README 配置表中说明；
-- README.md 为双语文档（中文在前、英文在后），修改内容时同步更新两种语言。
+- README.md 为英文主文档，中文说明维护在独立的 README.zh-CN.md；修改内容时同步更新两种语言。
 
 ## 提交信息
 

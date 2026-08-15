@@ -86,8 +86,15 @@ python /path/to/local-agent-senses/scripts/generate_adapters.py --agents mcp --o
 - **GUI 粘贴的图片**：聊天里直接粘贴的附件仍需要用户先保存成文件再给路径
   （所有工具行为一致）；本机屏幕/剪贴板可用
   `python vision.py --capture screen|clipboard` 直接抓取。
-- **媒体 URL 防 SSRF**：只允许公网 http/https，内网/回环/云元数据地址被拦截；
-  ffmpeg 直读的流在初始 URL 校验后由其自行处理后续跳转。
+- **媒体 URL 防 SSRF（best-effort）**：只允许公网 http/https，内网/回环/云元数据
+  地址在下载前被拦截，每次重定向都重新校验。但标准库下载器无法把连接固定到
+  已批准的 IP，DNS rebinding 只是被缓解、并未被根除；直连 ffmpeg 流式读取
+  （`VISION_DIRECT_URL_STREAM`）完全绕开这套防护，默认关闭。严格 SSRF 场景
+  应把下载放到出口代理/allowlist 之后。
+- **远程端点**：`api_base` 必须使用 https（仅 localhost 允许 http）；无 scheme、
+  带用户名密码的 URL 会被拒绝。
+- **yt-dlp 是额外信任边界**：它自带 DNS 解析与重定向；原始 URL 与返回的每个
+  直链都会再次做安全检查，但仓库本身无法沙箱化 yt-dlp 的网络行为。
 - **远程/沙箱 agent**：如果 agent 跑在云 VM 或隔离沙箱里，访问不到本机
   Ollama；此时需配置 `api_base` 指向可达的 OpenAI 兼容端点。
 - **自带视觉的模型**：当前模型原生支持图片时不需要本技能。

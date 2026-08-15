@@ -8,6 +8,8 @@ import tempfile
 import types
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config  # noqa: E402
@@ -125,11 +127,122 @@ def test_env_overrides_config():
 
 
 def test_explicit_config_path_no_fallback():
+    """An explicit VISION_CONFIG that does not exist is a hard error, and no
+    fallback to the search path is attempted."""
     os.environ["VISION_CONFIG"] = str(Path("Z:/nonexistent/vision-config.json"))
     config.user_config.cache_clear()
     try:
+        with pytest.raises(config.ConfigError):
+            config.user_config()
+    finally:
+        os.environ.pop("VISION_CONFIG", None)
+        config.user_config.cache_clear()
+
+
+def test_explicit_config_broken_json_raises(monkeypatch, tmp_path):
+    p = tmp_path / "broken.json"
+    p.write_text("{not valid json", encoding="utf-8")
+    monkeypatch.setenv("VISION_CONFIG", str(p))
+    config.user_config.cache_clear()
+    try:
+        with pytest.raises(config.ConfigError, match="Invalid JSON"):
+            config.user_config()
+    finally:
+        config.user_config.cache_clear()
+
+
+def test_explicit_config_top_level_array_raises(monkeypatch, tmp_path):
+    p = tmp_path / "array.json"
+    p.write_text("[1, 2, 3]", encoding="utf-8")
+    monkeypatch.setenv("VISION_CONFIG", str(p))
+    config.user_config.cache_clear()
+    try:
+        with pytest.raises(config.ConfigError, match="must contain a JSON object"):
+            config.user_config()
+    finally:
+        config.user_config.cache_clear()
+
+
+def test_explicit_config_unreadable_raises(monkeypatch, tmp_path):
+    p = tmp_path / "blocked.json"
+    p.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("VISION_CONFIG", str(p))
+    monkeypatch.setattr(config.Path, "read_text",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("denied")))
+    config.user_config.cache_clear()
+    try:
+        with pytest.raises(config.ConfigError):
+            config.user_config()
+    finally:
+        config.user_config.cache_clear()
+
+
+def test_auto_search_corrupt_config_raises(monkeypatch, tmp_path):
+    """A corrupt config found via the automatic search is an error, not a
+    silent fallback to the next candidate or to defaults."""
+    home = tmp_path / "home"
+    (home / ".cc-switch").mkdir(parents=True)
+    (home / ".cc-switch" / "vision-config.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr(config, "SCRIPT_DIR", tmp_path / "repo")
+    monkeypatch.setattr(config.Path, "home", staticmethod(lambda: home))
+    config.user_config.cache_clear()
+    try:
+        with pytest.raises(config.ConfigError):
+            config.user_config()
+    finally:
+        config.user_config.cache_clear()
+
+
+def test_auto_search_missing_files_return_empty(monkeypatch, tmp_path):
+    """No config file anywhere is not an error; defaults still apply."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(config, "SCRIPT_DIR", tmp_path / "repo")
+    monkeypatch.setattr(config.Path, "home", staticmethod(lambda: home))
+    config.user_config.cache_clear()
+    try:
         assert config.user_config() == {}
-        assert config.text_model() == "haervwe/GLM-4.6V-Flash-9B"
+    finally:
+        config.user_config.cache_clear()
+
+
+def test_doctor_with_broken_config_returns_structured_result():
+    os.environ["VISION_CONFIG"] = str(Path("Z:/nonexistent/vision-config.json"))
+    config.user_config.cache_clear()
+    try:
+        report = vision.doctor_report()
+        assert report["ok"] is False
+        assert any(c["name"] == "config" and c["status"] == "error"
+                   for c in report["checks"])
+    finally:
+        os.environ.pop("VISION_CONFIG", None)
+        config.user_config.cache_clear()
+
+
+def test_cli_config_error_is_readable_and_exits_2(monkeypatch):
+    monkeypatch.setenv("VISION_CONFIG", str(Path("Z:/nonexistent/vision-config.json")))
+    config.user_config.cache_clear()
+    try:
+        r = vision.run_cli(["-", "--prompt", "x"], b"")
+        assert r.returncode == 2
+        assert "Configuration error" in r.stderr.decode("utf-8", "replace")
+        assert "Traceback" not in r.stderr.decode("utf-8", "replace")
+    finally:
+        os.environ.pop("VISION_CONFIG", None)
+        config.user_config.cache_clear()
+
+
+def test_cli_doctor_json_with_broken_config_is_structured(monkeypatch):
+    monkeypatch.setenv("VISION_CONFIG", str(Path("Z:/nonexistent/vision-config.json")))
+    config.user_config.cache_clear()
+    try:
+        r = vision.run_cli(["--doctor", "--json"])
+        assert r.returncode == 0
+        out = json.loads(r.stdout.decode("utf-8"))
+        assert out["ok"] is False
+        assert any(c["name"] == "config" and c["status"] == "error"
+                   for c in out["checks"])
+        assert "Traceback" not in r.stderr.decode("utf-8", "replace")
     finally:
         os.environ.pop("VISION_CONFIG", None)
         config.user_config.cache_clear()

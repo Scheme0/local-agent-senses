@@ -27,6 +27,14 @@ EXTRAS_DIR = Path(__file__).resolve().parent / "extras"
 # fetching attacker-controlled links). Block addresses that are local to the
 # machine or private network: loopback, RFC1918, CGNAT, link-local (including
 # cloud metadata 169.254.169.254), multicast, and benchmarking ranges.
+#
+# LIMITATION (best-effort only): stdlib urllib resolves DNS and connects in one
+# step, so a hostname can in principle be re-resolved between our check and the
+# actual connect (DNS rebinding). This guard reduces that risk but does NOT
+# eliminate it; a deployment with strict SSRF requirements must put the
+# downloader behind an egress proxy / allowlist. Direct ffmpeg URL streaming
+# (VISION_DIRECT_URL_STREAM) performs its own DNS resolution entirely outside
+# this guard and is therefore disabled by default.
 _UNSAFE_NETS = (
     ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("10.0.0.0/8"),
@@ -259,7 +267,8 @@ def normalize_image(data: bytes) -> bytes:
 def _pdf_renderer_exe() -> str:
     """Locate the PDF rasterizer: VISION_PDF_RENDERER / pdf_renderer > pdftoppm."""
     explicit = config.env("VISION_PDF_RENDERER") or config.cfg_value("pdf_renderer")
-    if explicit and Path(explicit).exists():
+    if explicit:
+        config.validate_external_tool(explicit, "VISION_PDF_RENDERER")
         return explicit
     found = shutil.which("pdftoppm")
     if found:
@@ -278,18 +287,17 @@ def rasterize_pdf(data: bytes) -> tuple[list[bytes], bool]:
     the in-memory page bytes survive.
     """
     exe = _pdf_renderer_exe()
-    cap = config.max_pdf_pages()
+    # A configured 0 or absurdly high value still respects the system ceiling.
+    cap = config.effective_pdf_pages()
     dpi = config.pdf_dpi()
     # Render one extra page so truncation can be detected without pdfinfo.
-    limit = (cap + 1) if cap > 0 else None
+    limit = cap + 1
     config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=config.TEMP_DIR, prefix="pdf-") as tmp:
         src = Path(tmp) / "in.pdf"
         src.write_bytes(data)
         prefix = Path(tmp) / "page"
-        cmd = [exe, "-png", "-r", str(dpi)]
-        if limit is not None:
-            cmd += ["-l", str(limit)]
+        cmd = [exe, "-png", "-r", str(dpi), "-l", str(limit)]
         cmd += [str(src), str(prefix)]
         try:
             proc = subprocess.run(cmd, capture_output=True, timeout=600)
@@ -308,7 +316,7 @@ def rasterize_pdf(data: bytes) -> tuple[list[bytes], bool]:
         pages = [p.read_bytes() for p in sorted(tmp.glob("page-*.png"), key=_page_num)]
     if not pages:
         raise RuntimeError("PDF rasterization produced no pages.")
-    truncated = cap > 0 and len(pages) > cap
+    truncated = len(pages) > cap
     return (pages[:cap] if truncated else pages), truncated
 
 
@@ -344,7 +352,8 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
                 direct = getattr(source, key)
                 ensure_url_safe(direct)
                 if not config.direct_url_streaming():
-                    data = fetch_url_bytes(direct, config.max_download_mb() * (1 << 20))
+                    data = fetch_url_bytes(direct,
+                                           config.effective_download_cap_mb() * (1 << 20))
                     return MediaSpec(kind=sniff_bytes(data), source="url", data=data,
                                      subtitle_text=source.subtitle_text,
                                      title=source.title)
@@ -358,13 +367,13 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
                 )
         clean = arg.rsplit("?", 1)[0].lower()
         if clean.endswith(tuple(formats.IMAGE_EXTS)):
-            # 0 (disabled) falls back to the generic download cap so remote
+            # 0 (disabled) falls back to the effective download cap so remote
             # images still cannot buffer without bound.
-            cap_mb = config.max_image_mb() or config.max_download_mb() or 500
+            cap_mb = config.max_image_mb() or config.effective_download_cap_mb()
             data = fetch_url_bytes(arg, cap_mb * (1 << 20))
             return MediaSpec(kind="image", source="url", data=data)
         if clean.endswith(tuple(formats.DOCUMENT_EXTS)):
-            data = fetch_url_bytes(arg, config.max_download_mb() * (1 << 20))
+            data = fetch_url_bytes(arg, config.effective_download_cap_mb() * (1 << 20))
             return _rasterized_pdf("url", data)
         if clean.endswith(tuple(formats.AUDIO_EXTS)) and config.direct_url_streaming():
             return MediaSpec(kind="audio", source="url", path=arg,
@@ -373,7 +382,7 @@ def resolve_input(arg: str, want: str = "auto") -> MediaSpec:
             return MediaSpec(kind="video", source="url", path=arg,
                              headers={"User-Agent": "Mozilla/5.0"})
         # Unknown type: buffer and sniff (keeps the existing fallback behavior).
-        data = fetch_url_bytes(arg, config.max_download_mb() * (1 << 20))
+        data = fetch_url_bytes(arg, config.effective_download_cap_mb() * (1 << 20))
         kind = sniff_bytes(data)
         if kind == "pdf":
             return _rasterized_pdf("url", data)

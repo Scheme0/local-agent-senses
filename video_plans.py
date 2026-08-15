@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +35,12 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 import config  # noqa: E402
+import service  # noqa: E402
+
+# Hard ceiling for thumbnail candidates in a single extraction pass. This is a
+# safety cap, not a tunable: it is always applied by the built-in schemes and
+# cannot be disabled through MCP or config (0 never disables it).
+MAX_THUMBNAIL_FRAMES = 1200
 
 
 @dataclass
@@ -63,6 +70,9 @@ def ffmpeg_bin() -> str:
         str(SCRIPT_DIR / "ffmpeg" / "bin" / "ffmpeg"),
         str(SCRIPT_DIR / "bin" / "ffmpeg"),
     ]
+    explicit = os.environ.get("VISION_FFMPEG", "")
+    if explicit:
+        config.validate_external_tool(explicit, "VISION_FFMPEG")
     for c in candidates:
         if c and Path(c).exists():
             return c
@@ -75,9 +85,15 @@ def ffmpeg_bin() -> str:
     )
 
 
-def run_ffmpeg(args, timeout: int = 3600, input: bytes | None = None):
+def run_ffmpeg(args, timeout: int = 3600, input: bytes | None = None, deadline=None):
     args = _inject_http_opts(args)
     cmd = [ffmpeg_bin(), *args]
+    if deadline is not None:
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            raise service.DeadlineExceededError(
+                "deadline exceeded before ffmpeg started")
+        timeout = min(timeout, remaining)
     try:
         proc = subprocess.run(cmd, capture_output=True, input=input, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -118,10 +134,10 @@ def _media_input(media: str, input: bytes | None = None):
     return ["-i", "pipe:0"], input
 
 
-def probe(path: str, input: bytes | None = None) -> dict:
+def probe(path: str, input: bytes | None = None, deadline=None) -> dict:
     """Duration / resolution / audio / subtitle info from `ffmpeg -i` stderr."""
     args, data = _media_input(path, input)
-    _, _, err = run_ffmpeg([*args], timeout=120, input=data)
+    _, _, err = run_ffmpeg([*args], timeout=120, input=data, deadline=deadline)
     info = {"duration": 0.0, "width": 0, "height": 0, "has_audio": False, "has_subtitle": False}
     m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", err)
     if m:
@@ -238,9 +254,9 @@ def _band_crop(width: int, height: int, band: str = "bottom") -> str | None:
 
 def extract_all_jpegs(path: str, fps: float, max_side: int, start: float | None = None,
                       end: float | None = None, crop: str | None = None,
-                      input: bytes | None = None) -> list[Frame]:
+                      input: bytes | None = None, deadline=None) -> list[Frame]:
     """One decode pass -> all sampled frames as JPEGs in memory with timestamps."""
-    info = probe(path, input=input)
+    info = probe(path, input=input, deadline=deadline)
     cw, ch = _crop_dims(info["width"], info["height"], crop)
     w, h = _scale_dims(cw, ch, max_side)
     args, data = _media_input(path, input)
@@ -255,7 +271,7 @@ def extract_all_jpegs(path: str, fps: float, max_side: int, start: float | None 
     parts.append(f"scale={w}:{h}")
     vf = ",".join(parts)
     args += ["-vf", vf, "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "2", "-"]
-    code, out, err = run_ffmpeg(args, input=data)
+    code, out, err = run_ffmpeg(args, input=data, deadline=deadline)
     if code != 0 or not out:
         raise RuntimeError(f"ffmpeg frame extraction failed: {err.strip()[:300]}")
     jpegs = _split_mjpeg(out)
@@ -265,11 +281,11 @@ def extract_all_jpegs(path: str, fps: float, max_side: int, start: float | None 
 
 def extract_frame_seek(path: str, t: float, max_side: int, crop: str | None = None,
                        input: bytes | None = None,
-                       keyframes: bool = False) -> Frame | None:
+                       keyframes: bool = False, deadline=None) -> Frame | None:
     """Extract one frame near timestamp t (fast seek for files, decode-seek for
     pipes). With keyframes=True, only keyframes are decoded (-skip_frame nokey):
     much faster for long videos, at the cost of sub-second accuracy."""
-    info = probe(path, input=input)
+    info = probe(path, input=input, deadline=deadline)
     cw, ch = _crop_dims(info["width"], info["height"], crop)
     w, h = _scale_dims(cw, ch, max_side)
     args, data = _media_input(path, input)
@@ -287,7 +303,7 @@ def extract_frame_seek(path: str, t: float, max_side: int, crop: str | None = No
         code, out, err = run_ffmpeg(
             [*ordered, "-frames:v", "1", "-vf", vf,
              "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "2", "-"],
-            timeout=180, input=data)
+            timeout=180, input=data, deadline=deadline)
         if code == 0 and out:
             break
         out = b""
@@ -299,8 +315,14 @@ def extract_frame_seek(path: str, t: float, max_side: int, crop: str | None = No
 
 def extract_thumbnails(path: str, fps: float = 1.0, width: int = 160, height: int = 90,
                        start: float | None = None, end: float | None = None,
-                       crop: str | None = None, input: bytes | None = None):
-    """Tiny grayscale frames for dHash-based similarity (cheap, all in memory)."""
+                       crop: str | None = None, input: bytes | None = None,
+                       max_frames: int | None = None, deadline=None):
+    """Tiny grayscale frames for dHash-based similarity (cheap, all in memory).
+
+    When max_frames is set, ffmpeg receives `-frames:v` so it stops writing
+    after that many frames instead of streaming an unbounded raw stream into
+    memory; the parsed list is truncated again as a second guard.
+    """
     args, data = _media_input(path, input)
     if start is not None:
         ss = ["-ss", f"{start:.3f}"]
@@ -311,18 +333,29 @@ def extract_thumbnails(path: str, fps: float = 1.0, width: int = 160, height: in
     if crop:
         vf += f",crop={crop}"
     vf += f",scale={width}:{height}"
-    args += ["-vf", vf, "-pix_fmt", "gray",
-             "-f", "rawvideo", "-"]
-    code, out, err = run_ffmpeg(args, input=data)
+    args += ["-vf", vf, "-pix_fmt", "gray", "-f", "rawvideo", "-"]
+    if max_frames is not None:
+        args[-1:-1] = ["-frames:v", str(max_frames)]
+    code, out, err = run_ffmpeg(args, input=data, deadline=deadline)
     if code != 0:
         raise RuntimeError(f"ffmpeg thumbnail extraction failed: {err.strip()[:300]}")
     frame_size = width * height
     frames = []
     t0 = start if start is not None else 0.0
     for i in range(len(out) // frame_size):
+        if max_frames is not None and len(frames) >= max_frames:
+            break
         chunk = out[i * frame_size : (i + 1) * frame_size]
         frames.append((t0 + i / fps, chunk))
     return frames
+
+
+def _bounded_fps(fps: float, duration: float | None) -> float:
+    """Cap a sampling rate so a very long video still yields at most
+    MAX_THUMBNAIL_FRAMES candidates at 1x fps."""
+    if not duration or duration <= 0:
+        return fps
+    return min(fps, MAX_THUMBNAIL_FRAMES / duration)
 
 
 def frame_diff(a: bytes, b: bytes) -> float:
@@ -370,18 +403,23 @@ def _dedupe_and_sample(thumbs, max_frames: int, dedupe: bool,
     return [selected[i] for i in chosen], len(thumbs)
 
 
-def _extract_selected(path, times, max_side, input=None, crop=None, fast_threshold=1800):
+def _extract_selected(path, times, max_side, input=None, crop=None,
+                      fast_threshold=1800, start=None, end=None, deadline=None):
     """Extract JPEGs for selected timestamps. Uses a single pass for normal
-    videos (exact timestamps) and per-frame seek for very long ones."""
+    videos (exact timestamps) and per-frame seek for very long ones. When a
+    time window is given, the single pass is limited to that window so a
+    short-window analysis does not decode the whole video."""
     is_remote = str(path).startswith(("http://", "https://"))
     fast = bool(times) and not is_remote and times[-1] <= fast_threshold
     if fast:
         try:
             all_frames = extract_all_jpegs(path, fps=1.0, max_side=max_side,
-                                           input=input, crop=crop)
+                                           input=input, crop=crop,
+                                           start=start, end=end, deadline=deadline)
             by_time = {round(f.t, 2): f for f in all_frames}
             return [by_time.get(round(t, 2))
-                    or extract_frame_seek(path, t, max_side, input=input, crop=crop)
+                    or extract_frame_seek(path, t, max_side, input=input, crop=crop,
+                                          deadline=deadline)
                     for t in times]
         except Exception:
             pass
@@ -390,14 +428,17 @@ def _extract_selected(path, times, max_side, input=None, crop=None, fast_thresho
         # Long or remote videos decode only keyframes: dramatically faster,
         # and the sampled frame is still within one GOP of the target time.
         f = extract_frame_seek(path, t, max_side, input=input, crop=crop,
-                               keyframes=not fast)
+                               keyframes=not fast, deadline=deadline)
         if f:
             frames.append(f)
     return frames
 
 
-def _finalize(path, info, times, max_side, mode, meta=None, input=None, crop=None) -> FrameSet:
-    frames = [f for f in _extract_selected(path, times, max_side, input=input, crop=crop) if f]
+def _finalize(path, info, times, max_side, mode, meta=None, input=None, crop=None,
+              start=None, end=None, deadline=None) -> FrameSet:
+    frames = [f for f in _extract_selected(path, times, max_side, input=input,
+                                           crop=crop, start=start, end=end,
+                                           deadline=deadline) if f]
     if not frames:
         raise RuntimeError("No usable frames extracted; make sure the video decodes correctly.")
     return FrameSet(
@@ -412,19 +453,24 @@ def _finalize(path, info, times, max_side, mode, meta=None, input=None, crop=Non
 
 def scheme_skim(path, info, fps=1.0, max_frames=24, max_side=1600,
                 dedupe=True, dedupe_threshold=3.0, min_interval=10.0,
-                input=None) -> FrameSet:
-    thumbs = extract_thumbnails(path, fps=fps, input=input)
+                input=None, deadline=None) -> FrameSet:
+    effective_fps = _bounded_fps(fps, info["duration"])
+    thumbs = extract_thumbnails(path, fps=effective_fps, input=input,
+                                max_frames=MAX_THUMBNAIL_FRAMES, deadline=deadline)
     times, sampled = _dedupe_and_sample(thumbs, max_frames, dedupe,
                                         dedupe_threshold, min_interval)
     return _finalize(path, info, times, max_side, "skim",
-                     {"sampled": sampled, "kept": len(times)}, input=input)
+                     {"sampled": sampled, "kept": len(times)},
+                     input=input, deadline=deadline)
 
 
 def scheme_scenes(path, info, threshold=4.0, max_frames=24, max_side=1600,
-                  input=None, max_gap=30.0) -> FrameSet:
+                  input=None, max_gap=30.0, deadline=None) -> FrameSet:
     """Scene-change keyframes, with a max-gap safety net so a long static
     segment still gets sampled instead of silently dropping out."""
-    thumbs = extract_thumbnails(path, fps=1.0, input=input)
+    effective_fps = _bounded_fps(1.0, info["duration"])
+    thumbs = extract_thumbnails(path, fps=effective_fps, input=input,
+                                max_frames=MAX_THUMBNAIL_FRAMES, deadline=deadline)
     times = [t for t, _ in thumbs]
     frames = [g for _, g in thumbs]
     dists = [frame_diff(frames[i], frames[i - 1]) for i in range(1, len(frames))]
@@ -445,7 +491,7 @@ def scheme_scenes(path, info, threshold=4.0, max_frames=24, max_side=1600,
                      {"threshold": round(used_threshold, 2),
                       "scene_frames": len(scene_times),
                       "max_gap": max_gap},
-                     input=input)
+                     input=input, deadline=deadline)
 
 
 def _fill_gaps(times, all_times, max_gap, max_frames):
@@ -471,35 +517,42 @@ def _fill_gaps(times, all_times, max_gap, max_frames):
 
 def scheme_window(path, info, start, end, fps=1.0, max_frames=24, max_side=1600,
                   dedupe=True, dedupe_threshold=3.0, min_interval=5.0,
-                  input=None) -> FrameSet:
+                  input=None, deadline=None) -> FrameSet:
     start = max(0.0, start)
     end = min(info["duration"], end) if info["duration"] else end
     if end <= start:
         raise ValueError(f"Invalid time window: from={start:.1f}s to={end:.1f}s")
-    thumbs = extract_thumbnails(path, fps=fps, start=start, end=end, input=input)
+    window_duration = end - start
+    effective_fps = _bounded_fps(fps, window_duration)
+    thumbs = extract_thumbnails(path, fps=effective_fps, start=start, end=end,
+                                input=input, max_frames=MAX_THUMBNAIL_FRAMES,
+                                deadline=deadline)
     times, sampled = _dedupe_and_sample(thumbs, max_frames, dedupe,
                                         dedupe_threshold, min_interval)
     return _finalize(path, info, times, max_side, "window",
-                     {"window": [round(start, 1), round(end, 1)]}, input=input)
+                     {"window": [round(start, 1), round(end, 1)]},
+                     input=input, start=start, end=end, deadline=deadline)
 
 
-def scheme_segments(path, info, n=6, max_side=1600, input=None) -> FrameSet:
+def scheme_segments(path, info, n=6, max_side=1600, input=None, deadline=None) -> FrameSet:
     n = max(1, min(n, 24))
     duration = info["duration"] or 1.0
     times = [(i + 0.5) * duration / n for i in range(n)]
-    return _finalize(path, info, times, max_side, "segments", {"n": n}, input=input)
+    return _finalize(path, info, times, max_side, "segments", {"n": n},
+                     input=input, deadline=deadline)
 
 
 def scheme_burst(path, info, start, duration=3.0, fps=5.0, max_frames=24,
-                 max_side=1600, input=None) -> FrameSet:
+                 max_side=1600, input=None, deadline=None) -> FrameSet:
     end = start + duration
     fs = scheme_window(path, info, start, end, fps=fps, max_frames=max_frames,
-                       max_side=max_side, dedupe=False, input=input)
+                       max_side=max_side, dedupe=False, input=input,
+                       deadline=deadline)
     fs.mode = "burst"
     return fs
 
 
-def scheme_contact(path, info, n=24, max_side=640, input=None) -> FrameSet:
+def scheme_contact(path, info, n=24, max_side=640, input=None, deadline=None) -> FrameSet:
     """One tiled contact sheet (ffmpeg tile filter) + per-cell timestamps."""
     duration = info["duration"] or 1.0
     n = max(1, min(n, 100))
@@ -509,7 +562,7 @@ def scheme_contact(path, info, n=24, max_side=640, input=None) -> FrameSet:
     args, data = _media_input(path, input)
     args += ["-vf", f"fps={fps},scale=160:90,tile={cols}x{rows}",
              "-frames:v", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3", "-"]
-    code, out, err = run_ffmpeg(args, input=data)
+    code, out, err = run_ffmpeg(args, input=data, deadline=deadline)
     if code != 0 or not out:
         raise RuntimeError(f"Contact sheet generation failed: {err.strip()[:300]}")
     jpegs = _split_mjpeg(out)
@@ -529,20 +582,22 @@ def scheme_contact(path, info, n=24, max_side=640, input=None) -> FrameSet:
 
 def scheme_text(path, info, fps=1.0, max_frames=48, max_side=1600, dedupe=True,
                 band="bottom", dedupe_threshold=2.0, min_interval=1.0,
-                input=None) -> FrameSet:
+                input=None, deadline=None) -> FrameSet:
     """Dense sampling of the subtitle/lyric band (bottom by default).
 
     Keeps every visibly changed frame so text that only changes in a small
     region (karaoke lines, captions) is not dropped by scene/dedupe filters.
     """
     crop = _band_crop(info["width"], info["height"], band)
-    thumbs = extract_thumbnails(path, fps=fps, crop=crop, input=input)
+    effective_fps = _bounded_fps(fps, info["duration"])
+    thumbs = extract_thumbnails(path, fps=effective_fps, crop=crop, input=input,
+                                max_frames=MAX_THUMBNAIL_FRAMES, deadline=deadline)
     times, sampled = _dedupe_and_sample(thumbs, max_frames, dedupe,
                                         dedupe_threshold, min_interval)
     return _finalize(path, info, times, max_side, "text",
                      {"band": band, "crop": crop, "sampled": sampled,
                       "kept": len(times)},
-                     input=input, crop=crop)
+                     input=input, crop=crop, deadline=deadline)
 
 
 SCHEMES = {

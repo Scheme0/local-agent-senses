@@ -42,9 +42,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 import config  # noqa: E402
 import media  # noqa: E402
 import ollama_client  # noqa: E402
+import service  # noqa: E402
 import video_plans  # noqa: E402
 
-__version__ = "0.5.0"
+DeadlineExceededError = service.DeadlineExceededError
+
+__version__ = config.package_version()
 
 ACTIVE_MODEL = ""
 TRANSCRIBE_PROMPT = (
@@ -158,6 +161,26 @@ def inference_timeout(mode: str = "auto") -> int:
     # Estimate generation time from the output budget (~20 token/s floor),
     # at least 10 minutes.
     return max(600, output_tokens(mode) // 20 + 300)
+
+
+def _check_deadline(deadline: float | None, stage: str) -> None:
+    """Abort before an expensive stage when the request deadline has passed.
+
+    deadline is None for CLI/standalone runs, which keep their own per-call
+    timeouts. The service facade attaches a per-request deadline to the args.
+    """
+    if deadline is None:
+        return
+    if time.monotonic() >= deadline:
+        raise DeadlineExceededError(f"deadline exceeded at {stage}")
+
+
+def _remaining(deadline: float | None, operation_timeout: int) -> int:
+    """Seconds left for one underlying call, bounded by its own timeout and
+    never zero or negative."""
+    if deadline is None:
+        return operation_timeout
+    return min(operation_timeout, max(1, int(deadline - time.monotonic())))
 
 
 def friendly_error(e: Exception) -> str:
@@ -370,7 +393,9 @@ def fit_budget(images: list[dict], budget: int) -> list[dict]:
     return images
 
 
-def ask_model(prompt: str, images_b64: list[str], mode: str = "auto") -> str:
+def ask_model(prompt: str, images_b64: list[str], mode: str = "auto",
+              deadline: float | None = None) -> str:
+    _check_deadline(deadline, "model call")
     ensure_single_resident(model_name())
     think = None
     if model_name() == config.quick_model() and not quick_think():
@@ -382,7 +407,7 @@ def ask_model(prompt: str, images_b64: list[str], mode: str = "auto") -> str:
             num_ctx=context_window(mode, len(images_b64)),
             think=think,
             keep_alive=keep_alive(),
-            timeout=inference_timeout(mode),
+            timeout=_remaining(deadline, inference_timeout(mode)),
         )
     except Exception as e:
         raise RuntimeError(friendly_error(e)) from e
@@ -556,10 +581,12 @@ def print_json(obj: dict) -> None:
 
 def run_speech(media: str, lang: str, asr_model: str,
                input_bytes: bytes | None = None,
-               echo_stderr: bool = False) -> tuple[str, bool]:
+               echo_stderr: bool = False,
+               deadline: float | None = None) -> tuple[str, bool]:
     """Transcribe audio; segment lines stream to stdout and (full text,
     whether a fallback model was used) is returned. With echo_stderr=True the
     streaming lines go to stderr so stdout stays a single clean JSON object."""
+    _check_deadline(deadline, "asr")
     py = config.speech_python()
     if not py or not Path(py).exists():
         raise RuntimeError("Speech environment not found"
@@ -569,7 +596,7 @@ def run_speech(media: str, lang: str, asr_model: str,
     def transcribe(model: str) -> str:
         return _run_speech_proc(
             [py, str(SPEECH_PY), media, "--lang", lang, "--model", model],
-            input_bytes=input_bytes, echo_stderr=echo_stderr,
+            input_bytes=input_bytes, echo_stderr=echo_stderr, deadline=deadline,
         )
 
     text = transcribe(asr_model)
@@ -585,7 +612,8 @@ def run_speech(media: str, lang: str, asr_model: str,
 
 
 def _run_speech_proc(cmd: list[str], input_bytes: bytes | None = None,
-                     timeout: int = 1800, echo_stderr: bool = False) -> str:
+                     timeout: int = 1800, echo_stderr: bool = False,
+                     deadline: float | None = None) -> str:
     """Run a speech subprocess and return its full stdout text.
 
     The stdout/stderr pump threads start BEFORE stdin is written: a chatty
@@ -614,6 +642,7 @@ def _run_speech_proc(cmd: list[str], input_bytes: bytes | None = None,
     terr = threading.Thread(target=pump, args=(proc.stderr, err_lines, False), daemon=True)
     tout.start()
     terr.start()
+    effective_timeout = _remaining(deadline, timeout)
     try:
         if input_bytes is not None:
             try:
@@ -621,10 +650,11 @@ def _run_speech_proc(cmd: list[str], input_bytes: bytes | None = None,
             except BrokenPipeError:
                 pass  # child exited before reading; proc.wait reports its status
             proc.stdin.close()
-        proc.wait(timeout=timeout)
+        proc.wait(timeout=effective_timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        raise RuntimeError(f"Speech transcription timed out (>{timeout // 60} minutes)")
+        raise RuntimeError(
+            f"Speech transcription timed out (>{effective_timeout // 60} minutes)")
     tout.join(timeout=10)
     terr.join(timeout=10)
     if proc.returncode != 0:
@@ -633,6 +663,8 @@ def _run_speech_proc(cmd: list[str], input_bytes: bytes | None = None,
 
 
 def analyze_images(args) -> None:
+    deadline = getattr(args, "deadline", None)
+    _check_deadline(deadline, "image parse")
     b64_list = []
     for arg in args.media:
         spec = media.resolve_input(arg, want="image")
@@ -648,7 +680,8 @@ def analyze_images(args) -> None:
         prompt = build_image_prompt(len(b64_list), args.context,
                                     args.prompt or "Describe these images in detail, "
                                                    "including all visible text and UI elements.")
-    result = ask_model(prompt, b64_list, args.mode)
+    result = ask_model(prompt, b64_list, args.mode, deadline=deadline)
+    _check_deadline(deadline, "result formatting")
     warn_encoding_if_suspicious(result, args.media[0] if args.media else "")
     if args.json:
         print_json(json_result_image(result, args.media))
@@ -659,12 +692,14 @@ def analyze_images(args) -> None:
 def analyze_pdf(spec, label: str, args) -> None:
     """Analyze a rasterized PDF: each page becomes one image in a multi-image
     request (description or verbatim transcription)."""
+    deadline = getattr(args, "deadline", None)
     pages = spec.pages or []
     if not pages:
         raise RuntimeError("PDF rasterization produced no pages.")
     if spec.truncated:
-        print(f"[vision] PDF exceeds the {config.max_pdf_pages()}-page cap; "
+        print(f"[vision] PDF exceeds the {config.effective_pdf_pages()}-page cap; "
               f"only the first {len(pages)} pages were analyzed.", file=sys.stderr)
+    _check_deadline(deadline, "image parse")
     b64_list = [media.image_to_b64(p, args.crop, args.size) for p in pages]
     if args.transcribe:
         prompt = build_image_transcribe_prompt(len(b64_list), args.context, args.prompt)
@@ -672,7 +707,8 @@ def analyze_pdf(spec, label: str, args) -> None:
         prompt = build_image_prompt(len(b64_list), args.context,
                                     args.prompt or "Describe this document page by page, "
                                                    "including all visible text and UI elements.")
-    result = ask_model(prompt, b64_list, args.mode)
+    result = ask_model(prompt, b64_list, args.mode, deadline=deadline)
+    _check_deadline(deadline, "result formatting")
     warn_encoding_if_suspicious(result, label)
     if args.json:
         print_json(json_result_pdf(result, label, len(pages)))
@@ -701,6 +737,7 @@ def _ffmpeg_headers_scope():
 
 
 def analyze_video(arg: str, args) -> None:
+    deadline = getattr(args, "deadline", None)
     spec = media.resolve_input(arg, want="video")
     if spec.kind == "image":
         analyze_images(args)
@@ -719,7 +756,8 @@ def analyze_video(arg: str, args) -> None:
             os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
         for attempt in range(1, 4):
             try:
-                info = video_plans.probe(media_arg, input=spec.data)
+                _check_deadline(deadline, "video probe")
+                info = video_plans.probe(media_arg, input=spec.data, deadline=deadline)
                 if info["duration"] <= 0:
                     raise RuntimeError("Cannot read video duration; the file may be "
                                        "corrupted or not a valid video.")
@@ -731,40 +769,44 @@ def analyze_video(arg: str, args) -> None:
                         mode = "skim" if info["duration"] <= 60 else "contact"
                 else:
                     mode = args.mode
+                _check_deadline(deadline, "video frame extraction")
                 if mode == "window":
                     if args.start is None or args.end is None:
                         raise RuntimeError("--mode window requires --from and --to")
                     frameset = video_plans.scheme_window(
                         media_arg, info, args.start, args.end, fps=args.fps or 1.0,
                         max_frames=args.max_frames or 24, max_side=max_side,
-                        dedupe=not args.no_dedupe, input=spec.data)
+                        dedupe=not args.no_dedupe, input=spec.data, deadline=deadline)
                 elif mode == "burst":
                     if args.start is None:
                         raise RuntimeError("--mode burst requires --from")
                     frameset = video_plans.scheme_burst(
                         media_arg, info, args.start, duration=args.duration or 3.0,
                         fps=args.fps or 5.0, max_frames=args.max_frames or 24,
-                        max_side=max_side, input=spec.data)
+                        max_side=max_side, input=spec.data, deadline=deadline)
                 elif mode == "segments":
                     frameset = video_plans.scheme_segments(
-                        media_arg, info, n=args.max_frames or 24, max_side=max_side, input=spec.data)
+                        media_arg, info, n=args.max_frames or 24, max_side=max_side,
+                        input=spec.data, deadline=deadline)
                 elif mode == "text":
                     frameset = video_plans.scheme_text(
                         media_arg, info, fps=args.fps or 1.0,
                         max_frames=args.max_frames or 48, max_side=max_side,
-                        dedupe=not args.no_dedupe, band=args.band, input=spec.data)
+                        dedupe=not args.no_dedupe, band=args.band, input=spec.data,
+                        deadline=deadline)
                 elif mode == "scenes":
                     frameset = video_plans.scheme_scenes(
                         media_arg, info, max_frames=args.max_frames or 24,
-                        max_side=max_side, input=spec.data)
+                        max_side=max_side, input=spec.data, deadline=deadline)
                 elif mode == "contact":
                     frameset = video_plans.scheme_contact(
-                        media_arg, info, n=args.max_frames or 24, input=spec.data)
+                        media_arg, info, n=args.max_frames or 24, input=spec.data,
+                        deadline=deadline)
                 else:
                     frameset = video_plans.scheme_skim(
                         media_arg, info, fps=args.fps or 1.0,
                         max_frames=args.max_frames or 24, max_side=max_side,
-                        dedupe=not args.no_dedupe, input=spec.data)
+                        dedupe=not args.no_dedupe, input=spec.data, deadline=deadline)
                 break
             except Exception as e:
                 if spec.source != "url" or attempt == 3:
@@ -792,7 +834,8 @@ def analyze_video(arg: str, args) -> None:
                                     args.prompt or "Describe in chronological order what "
                                                    "happens in this video, including scene "
                                                    "changes and all visible text.")
-    result = ask_model(prompt, [im["b64"] for im in images], mode)
+    result = ask_model(prompt, [im["b64"] for im in images], mode, deadline=deadline)
+    _check_deadline(deadline, "result formatting")
     warn_encoding_if_suspicious(result, arg)
     if args.json:
         print_json(json_result_video(result, frameset, spec.title or "",
@@ -806,6 +849,7 @@ def analyze_video(arg: str, args) -> None:
 
 
 def analyze_audio(arg: str, args) -> None:
+    deadline = getattr(args, "deadline", None)
     spec = media.resolve_input(arg, want="audio")
     if spec.kind == "image":
         raise RuntimeError(
@@ -826,7 +870,8 @@ def analyze_audio(arg: str, args) -> None:
             os.environ["VISION_FFMPEG_HEADERS"] = json.dumps(spec.headers)
         for attempt in range(1, 4):
             try:
-                info = video_plans.probe(media_arg, input=spec.data)
+                _check_deadline(deadline, "video probe")
+                info = video_plans.probe(media_arg, input=spec.data, deadline=deadline)
                 if info.get("has_subtitle"):
                     subtitle = video_plans.extract_subtitle_text(media_arg, input=spec.data)
                     if subtitle:
@@ -837,8 +882,10 @@ def analyze_audio(arg: str, args) -> None:
                         print("\n[meta] source=subtitle")
                         return
                 enforce_duration_limit(info["duration"], f"Audio ({arg})")
+                _check_deadline(deadline, "asr")
                 text, fallback = run_speech(media_arg, args.lang, args.asr_model,
-                                            input_bytes=spec.data, echo_stderr=args.json)
+                                            input_bytes=spec.data, echo_stderr=args.json,
+                                            deadline=deadline)
                 break
             except Exception as e:
                 if spec.source != "url" or attempt == 3:
@@ -857,6 +904,7 @@ def analyze_audio(arg: str, args) -> None:
         print("[vision] paraformer found no speech (possibly music); "
               "fell back to SenseVoice",
               file=sys.stderr)
+    _check_deadline(deadline, "result formatting")
     if args.json:
         print_json(json_result_audio(text, "asr"))
         return
@@ -1080,19 +1128,26 @@ def doctor_report() -> dict:
         checks.append({"name": name, "status": status, "detail": detail,
                        "required": required})
     add("python", "pass", sys.version.split()[0])
+    config_ok = True
     try:
-        add("ffmpeg", "pass", video_plans.ffmpeg_bin())
-    except Exception as exc:
-        add("ffmpeg", "missing", str(exc))
-    if config.use_openai_api():
-        add("model backend", "configured", config.api_base())
-        add("models", "not-checked", "run vision --check for live endpoint/model checks")
-    else:
-        add("ollama", "configured", ollama_base(), required=False)
-        add("models", "not-checked", "run vision --check for live Ollama/model checks")
-    speech = config.speech_python_explicit()
-    add("speech", "available" if speech and Path(speech).exists() else "optional-missing",
-        speech or "set VISION_SPEECH_PYTHON", required=False)
+        config.user_config()
+    except config.ConfigError as exc:
+        config_ok = False
+        add("config", "error", str(exc))
+    if config_ok:
+        try:
+            add("ffmpeg", "pass", video_plans.ffmpeg_bin())
+        except Exception as exc:
+            add("ffmpeg", "missing", str(exc))
+        if config.use_openai_api():
+            add("model backend", "configured", config.api_base())
+            add("models", "not-checked", "run vision --check for live endpoint/model checks")
+        else:
+            add("ollama", "configured", ollama_base(), required=False)
+            add("models", "not-checked", "run vision --check for live Ollama/model checks")
+        speech = config.speech_python_explicit()
+        add("speech", "available" if speech and Path(speech).exists() else "optional-missing",
+            speech or "set VISION_SPEECH_PYTHON", required=False)
     add("mcp", "pass", "in-process service facade")
     failed = [c for c in checks if c["required"] and c["status"] in ("missing", "unavailable", "error")]
     return {"ok": not failed, "checks": checks}
@@ -1151,10 +1206,22 @@ def main() -> None:
                              "stdin/video sampling)")
     args = parser.parse_args()
 
+    try:
+        _main_dispatch(args, parser)
+    except config.ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _main_dispatch(args, parser) -> None:
+    """Run the parsed command; config.ConfigError propagates to main()."""
     global ACTIVE_MODEL, CTX_OVERRIDE
-    ACTIVE_MODEL = args.model or resolve_model(args.mode)
-    if args.ctx:
-        CTX_OVERRIDE = args.ctx
+    # --doctor reports config problems inside doctor_report() as a structured
+    # check, so it must not fail here while resolving a model.
+    if not args.doctor:
+        ACTIVE_MODEL = args.model or resolve_model(args.mode)
+        if args.ctx:
+            CTX_OVERRIDE = args.ctx
 
     if args.keep_alive:
         os.environ["VISION_KEEP_ALIVE"] = args.keep_alive
@@ -1233,6 +1300,8 @@ def main() -> None:
         touch_last_use()
         if not config.use_openai_api():
             start_watchdog()
+    except config.ConfigError:
+        raise
     except Exception as e:
         print(f"Analysis failed: {friendly_error(e)}", file=sys.stderr)
         sys.exit(1)

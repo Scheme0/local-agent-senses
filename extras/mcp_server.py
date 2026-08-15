@@ -21,6 +21,8 @@ vision_status / vision_check.
 
 import hashlib
 import json
+import logging
+import math
 import os
 import sys
 import tempfile
@@ -33,7 +35,6 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_NAME = "local-agent-senses"
-SERVER_VERSION = "0.5.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 if str(ROOT) not in sys.path:
@@ -45,14 +46,148 @@ except Exception:
     vision_config = None
     vision_service = None
 
+# Single version source: the shared package version, with a source-tree
+# fallback when the package is not installed.
+SERVER_VERSION = (vision_config.package_version()
+                  if vision_config is not None else "0+source")
+
+logger = logging.getLogger("vision-mcp")
+
 # Result cache: agents often re-ask about the same media, and local vision
 # inference is the slow part. Same tool + same arguments (with local file
 # mtime/size invalidation) are served from memory for CACHE_TTL seconds, and
 # persisted to disk so a server restart still hits for long-video questions.
 CACHE_TTL = 300
 CACHE_MAX = 64
+CACHE_MAX_RESULT_BYTES = 2_000_000     # per-entry result size cap (memory+disk)
+CACHE_MAX_FILES = 512                  # max .json files kept in the cache dir
+CACHE_MAX_FILE_BYTES = 10_000_000      # max single cache file on disk
 CACHEABLE = {"describe_image", "transcribe", "analyze_video", "transcribe_audio"}
 _cache: dict[tuple, tuple[float, str]] = {}
+
+# Captured at import time (pathlib.Path switches implementation based on
+# os.name, so the helpers read this flag instead of flipping os.name).
+_IS_POSIX = os.name != "nt"
+
+
+def _chmod_cache_dir(directory: Path) -> None:
+    """Restrict the cache directory to the current user (POSIX only)."""
+    if _IS_POSIX:
+        os.chmod(directory, 0o700)
+
+
+def _chmod_cache_file(path: Path) -> None:
+    """Restrict a cache file to the current user (POSIX only)."""
+    if _IS_POSIX:
+        os.chmod(path, 0o600)
+
+# Server-side validation bounds. The MCP inputSchema is a hint only: a client
+# may send raw JSON-RPC, so every tool re-validates its arguments here.
+MAX_IMAGES = 16
+MAX_MEDIA_LENGTH = 4096
+MAX_PROMPT_LENGTH = 20000
+MAX_CONTEXT_LENGTH = 20000
+MAX_CROP_LENGTH = 128
+MAX_TIME_LENGTH = 64
+ANALYZE_MODES = ("auto", "contact", "scenes", "skim", "window", "segments", "burst")
+ALLOWED_SIZES = ("full", "small")
+ALLOWED_BANDS = ("bottom", "top", "middle", "full")
+ALLOWED_LANGS = ("auto", "zh", "en", "yue", "ja", "ko")
+ALLOWED_ASR_MODELS = ("sensevoice", "paraformer")
+
+
+class MCPInputError(ValueError):
+    """Invalid client arguments; surfaced as {code: invalid_input}."""
+
+    code = "invalid_input"
+
+
+def _require_text(args: dict, key: str, default: str | None = None,
+                  max_length: int = MAX_PROMPT_LENGTH) -> str | None:
+    if key not in args or args[key] is None:
+        return default
+    value = args[key]
+    if not isinstance(value, str):
+        raise MCPInputError(f"'{key}' must be a string")
+    if len(value) > max_length:
+        raise MCPInputError(f"'{key}' must be at most {max_length} characters")
+    return value
+
+
+def _require_media(args: dict, key: str, max_length: int = MAX_MEDIA_LENGTH) -> str:
+    value = _require_text(args, key, max_length=max_length)
+    if value is None or not value.strip():
+        raise MCPInputError(f"'{key}' is required and cannot be empty")
+    return value
+
+
+def _optional_int(args: dict, key: str, minimum: int = 1, maximum: int = 1000) -> int | None:
+    if key not in args or args[key] is None:
+        return None
+    value = args[key]
+    if isinstance(value, bool):
+        raise MCPInputError(f"'{key}' must be an integer, not a boolean")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise MCPInputError(f"'{key}' must be an integer")
+        value = int(value)
+    if isinstance(value, str):
+        try:
+            value = int(value)
+        except ValueError:
+            raise MCPInputError(f"'{key}' must be an integer") from None
+    if not isinstance(value, int):
+        raise MCPInputError(f"'{key}' must be an integer")
+    if not minimum <= value <= maximum:
+        raise MCPInputError(f"'{key}' must be between {minimum} and {maximum}")
+    return value
+
+
+def _optional_number(args: dict, key: str, minimum: float | None = None,
+                     maximum: float | None = None) -> float | None:
+    if key not in args or args[key] is None:
+        return None
+    value = args[key]
+    if isinstance(value, bool):
+        raise MCPInputError(f"'{key}' must be a number, not a boolean")
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            raise MCPInputError(f"'{key}' must be a finite number") from None
+    if not isinstance(value, (int, float)):
+        raise MCPInputError(f"'{key}' must be a number")
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        raise MCPInputError(f"'{key}' must be finite (NaN and Infinity are not allowed)")
+    if minimum is not None and value < minimum:
+        raise MCPInputError(f"'{key}' must be at least {minimum}")
+    if maximum is not None and value > maximum:
+        raise MCPInputError(f"'{key}' must be at most {maximum}")
+    return value
+
+
+def _optional_bool(args: dict, key: str, default: bool = False) -> bool:
+    if key not in args or args[key] is None:
+        return default
+    value = args[key]
+    if not isinstance(value, bool):
+        raise MCPInputError(f"'{key}' must be a boolean")
+    return value
+
+
+def _choice(value, allowed, label: str) -> str:
+    if not isinstance(value, str) or value not in allowed:
+        raise MCPInputError(f"{label} must be one of: {', '.join(allowed)}")
+    return value
+
+
+def _optional_time(args: dict, key: str) -> str | None:
+    value = _require_text(args, key, max_length=MAX_TIME_LENGTH)
+    if value is None:
+        return None
+    if value.strip().startswith("-"):
+        raise MCPInputError(f"'{key}' cannot be a negative time")
+    return value
 
 TOOLS = [
     {
@@ -171,10 +306,36 @@ def run_service(tool: str, args: dict) -> str:
     return vision_service.execute_result(tool, args).to_json()
 
 
+def _cache_model() -> str:
+    """Model context for cache keys; changes invalidate cached results."""
+    if vision_config is None:
+        return "unknown"
+    try:
+        return vision_config.text_model() + "/" + vision_config.quick_model()
+    except Exception:
+        return "unknown"
+
+
+def _cache_backend() -> str:
+    """Backend type (openai vs ollama); the API key is never part of the key."""
+    if vision_config is None:
+        return "unknown"
+    try:
+        return "openai" if vision_config.use_openai_api() else "ollama"
+    except Exception:
+        return "unknown"
+
+
 def _cache_key(name: str, args: dict) -> tuple:
-    """Stable cache key. Local files are keyed by path + size + mtime so that
-    editing a file invalidates the entry; URLs keep their plain string."""
-    parts = []
+    """Stable cache key: server version + tool + model + backend + arguments.
+    Local files are keyed by path + size + mtime so that editing a file
+    invalidates the entry; URLs keep their plain string. No API key, full URL
+    or prompt content is stored in the key beyond the hashed disk filename."""
+    parts = [
+        ("server_version", SERVER_VERSION),
+        ("model", _cache_model()),
+        ("backend", _cache_backend()),
+    ]
     for key in sorted(args):
         value = args[key]
         if isinstance(value, list):
@@ -228,12 +389,16 @@ def _disk_read(key: tuple) -> str | None:
         p = _disk_path(key)
         if p is None or not p.exists():
             return None
+        if p.stat().st_size > CACHE_MAX_FILE_BYTES:
+            p.unlink(missing_ok=True)
+            logger.warning("MCP cache file exceeded the size limit and was removed")
+            return None
         data = json.loads(p.read_text(encoding="utf-8"))
         if time.time() - data.get("ts", 0) <= CACHE_TTL:
             return str(data.get("text", ""))
         p.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("MCP cache read failed: %s", type(exc).__name__)
     return None
 
 
@@ -242,7 +407,11 @@ def _disk_write(key: tuple, text: str) -> None:
         p = _disk_path(key)
         if p is None:
             return
+        if len(text.encode("utf-8")) > CACHE_MAX_RESULT_BYTES:
+            logger.warning("MCP cache entry exceeded the result size limit and was skipped")
+            return
         p.parent.mkdir(parents=True, exist_ok=True)
+        _chmod_cache_dir(p.parent)
         fd, temp_name = tempfile.mkstemp(prefix=".cache-", suffix=".tmp",
                                          dir=p.parent)
         try:
@@ -252,19 +421,28 @@ def _disk_write(key: tuple, text: str) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_name, p)
+            _chmod_cache_file(p)
         finally:
             try:
                 Path(temp_name).unlink(missing_ok=True)
             except OSError:
                 pass
-        files = sorted(p.parent.glob("*.json"), key=lambda f: f.stat().st_mtime)
-        for old in files[:max(0, len(files) - CACHE_MAX * 4)]:
-            old.unlink(missing_ok=True)
-    except Exception:
-        pass
+        try:
+            files = sorted(p.parent.glob("*.json"), key=lambda f: f.stat().st_mtime)
+            for old in files[:max(0, len(files) - CACHE_MAX_FILES)]:
+                old.unlink(missing_ok=True)
+            for f in files:
+                if f.stat().st_size > CACHE_MAX_FILE_BYTES:
+                    f.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("MCP cache cleanup failed: %s", type(exc).__name__)
+    except Exception as exc:
+        logger.warning("MCP cache write failed: %s", type(exc).__name__)
 
 
-def call_tool(name: str, args: dict) -> str:
+def call_tool(name: str, args) -> str:
+    if not isinstance(args, dict):
+        raise MCPInputError("tool arguments must be a JSON object")
     if name in CACHEABLE:
         key = _cache_key(name, args)
         now = time.monotonic()
@@ -291,63 +469,74 @@ def call_tool(name: str, args: dict) -> str:
 
 def _call_tool(name: str, args: dict) -> str:
     if name == "describe_image":
-        images = args.get("images") or []
-        if not images:
-            raise RuntimeError("images requires at least one image path or URL")
-        if not isinstance(images, list) or len(images) > 16 or not all(isinstance(x, str) and x.strip() for x in images):
-            raise RuntimeError("images must be a non-empty list of at most 16 strings")
-        prompt = args.get("prompt", "Describe these images in detail, including all visible text and UI elements.")
-        if not isinstance(prompt, str) or len(prompt) > 20000:
-            raise RuntimeError("prompt must be a string no longer than 20000 characters")
-        return run_service("describe_image", {"images": images,
-            "prompt": prompt, "context": args.get("context"),
-            "crop": args.get("crop"), "size": args.get("size", "full")})
+        images = args.get("images")
+        if not isinstance(images, list) or not images:
+            raise MCPInputError("images must be a non-empty list")
+        if len(images) > MAX_IMAGES:
+            raise MCPInputError(f"images must contain at most {MAX_IMAGES} items")
+        for item in images:
+            if not isinstance(item, str) or not item.strip():
+                raise MCPInputError("every image must be a non-empty string")
+            if len(item) > MAX_MEDIA_LENGTH:
+                raise MCPInputError(f"each image path/URL must be at most "
+                                    f"{MAX_MEDIA_LENGTH} characters")
+        prompt = _require_text(
+            args, "prompt",
+            default="Describe these images in detail, including all visible "
+                    "text and UI elements.")
+        context = _require_text(args, "context", max_length=MAX_CONTEXT_LENGTH)
+        crop = _require_text(args, "crop", max_length=MAX_CROP_LENGTH)
+        size = _choice(args.get("size", "full"), ALLOWED_SIZES, "size")
+        return run_service("describe_image", {
+            "images": images, "prompt": prompt, "context": context,
+            "crop": crop, "size": size,
+        })
 
     if name == "transcribe":
-        media = args.get("media")
-        if not media:
-            raise RuntimeError("media cannot be empty")
-        if args.get("max_frames"):
-            max_frames = int(args["max_frames"])
-            if not 1 <= max_frames <= 1000:
-                raise RuntimeError("max_frames must be between 1 and 1000")
+        media = _require_media(args, "media")
+        prompt = _require_text(args, "prompt", max_length=MAX_PROMPT_LENGTH)
+        context = _require_text(args, "context", max_length=MAX_CONTEXT_LENGTH)
+        crop = _require_text(args, "crop", max_length=MAX_CROP_LENGTH)
+        size = _choice(args.get("size", "full"), ALLOWED_SIZES, "size")
+        band = _choice(args.get("band", "bottom"), ALLOWED_BANDS, "band")
+        max_frames = _optional_int(args, "max_frames", 1, 1000)
+        no_dedupe = _optional_bool(args, "no_dedupe", False)
         return run_service("transcribe", {
-            "media": str(media),
-            "prompt": args.get("prompt"),
-            "context": args.get("context"),
-            "crop": args.get("crop"),
-            "size": args.get("size", "full"),
-            "max_frames": int(args["max_frames"]) if args.get("max_frames") else None,
-            "band": args.get("band", "bottom"),
-            "no_dedupe": args.get("no_dedupe", False),
+            "media": media, "prompt": prompt, "context": context,
+            "crop": crop, "size": size, "max_frames": max_frames,
+            "band": band, "no_dedupe": no_dedupe,
         })
 
     if name == "analyze_video":
-        video = args.get("video")
-        if not video:
-            raise RuntimeError("video cannot be empty")
-        mode = args.get("mode", "auto")
-        for key in ("from", "to", "fps", "max_frames", "duration"):
-            if args.get(key) is not None:
-                if key == "fps" and not 0 < float(args[key]) <= 60:
-                    raise RuntimeError("fps must be greater than 0 and at most 60")
-                if key == "max_frames" and not 1 <= int(args[key]) <= 1000:
-                    raise RuntimeError("max_frames must be between 1 and 1000")
-                if key == "duration" and not 0 < float(args[key]) <= 3600:
-                    raise RuntimeError("duration must be greater than 0 and at most 3600")
-        return run_service("analyze_video", {"video": str(video),
-            "prompt": args.get("prompt"), "context": args.get("context"),
-            "mode": mode, "from": args.get("from"), "to": args.get("to"),
-            "duration": args.get("duration"), "fps": args.get("fps"),
-            "max_frames": args.get("max_frames"),
-            "no_dedupe": args.get("no_dedupe", False)})
+        video = _require_media(args, "video")
+        mode = _choice(args.get("mode", "auto"), ANALYZE_MODES, "mode")
+        prompt = _require_text(args, "prompt", max_length=MAX_PROMPT_LENGTH)
+        context = _require_text(args, "context", max_length=MAX_CONTEXT_LENGTH)
+        start = _optional_time(args, "from")
+        end = _optional_time(args, "to")
+        duration = _optional_number(args, "duration", minimum=0.0, maximum=3600.0)
+        if duration is not None and duration <= 0:
+            raise MCPInputError("duration must be greater than 0 and at most 3600")
+        fps = _optional_number(args, "fps", minimum=0.0, maximum=60.0)
+        if fps is not None and fps <= 0:
+            raise MCPInputError("fps must be greater than 0 and at most 60")
+        max_frames = _optional_int(args, "max_frames", 1, 1000)
+        no_dedupe = _optional_bool(args, "no_dedupe", False)
+        return run_service("analyze_video", {
+            "video": video, "prompt": prompt, "context": context,
+            "mode": mode, "from": start, "to": end,
+            "duration": duration, "fps": fps, "max_frames": max_frames,
+            "no_dedupe": no_dedupe,
+        })
 
     if name == "transcribe_audio":
-        media = args.get("media")
-        if not media:
-            raise RuntimeError("media cannot be empty")
-        return run_service("transcribe_audio", {"media": str(media),
-            "lang": args.get("lang", "auto"), "asr_model": args.get("asr_model", "sensevoice")})
+        media = _require_media(args, "media")
+        lang = _choice(args.get("lang", "auto"), ALLOWED_LANGS, "lang")
+        asr_model = _choice(args.get("asr_model", "sensevoice"),
+                            ALLOWED_ASR_MODELS, "asr_model")
+        return run_service("transcribe_audio", {
+            "media": media, "lang": lang, "asr_model": asr_model,
+        })
 
     if name == "vision_status":
         return run_service("vision_status", {})

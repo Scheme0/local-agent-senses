@@ -16,10 +16,10 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 import config
+import media
 import media_formats as formats
 
 
@@ -90,7 +90,8 @@ def try_resolve(url: str) -> ResolvedStream | None:
 def ytdlp_exe() -> str:
     """Locate yt-dlp: VISION_YTDLP / config yt_dlp > PATH."""
     explicit = config.env("VISION_YTDLP") or config.cfg_value("yt_dlp")
-    if explicit and Path(explicit).exists():
+    if explicit:
+        config.validate_external_tool(explicit, "VISION_YTDLP")
         return explicit
     found = shutil.which("yt-dlp")
     if found:
@@ -161,6 +162,10 @@ class YtDlpResolver:
         return ytdlp_available()
 
     def resolve(self, url: str) -> ResolvedStream:
+        # yt-dlp is an independent network client (own DNS, own redirects), so
+        # the original URL is re-checked here even when the caller already
+        # checked it, and every returned stream URL is checked again.
+        media.ensure_url_safe(url)
         proc = subprocess.run(
             [ytdlp_exe(), "--dump-single-json", "--no-playlist", "--no-warnings",
              "--no-download", url],
@@ -172,6 +177,10 @@ class YtDlpResolver:
                                f"{(proc.stderr or proc.stdout).strip()[:300]}")
         info = json.loads(proc.stdout)
         video_url, audio_url = _pick_ytdlp_streams(info)
+        if video_url:
+            media.ensure_url_safe(video_url)
+        if audio_url:
+            media.ensure_url_safe(audio_url)
         if not video_url:
             raise RuntimeError("yt-dlp found no usable video stream")
         headers = None

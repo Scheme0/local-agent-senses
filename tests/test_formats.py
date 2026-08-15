@@ -25,7 +25,9 @@ def test_common_extensions_covered():
 
 
 def test_direct_media_suffixes_covers_all():
-    all_exts = formats.IMAGE_EXTS | formats.AUDIO_EXTS | formats.VIDEO_EXTS
+    # Documents (.pdf) are direct media suffixes too: they are handled by the
+    # PDF rasterize path, so the yt-dlp resolver must skip them as well.
+    all_exts = formats.IMAGE_EXTS | formats.AUDIO_EXTS | formats.VIDEO_EXTS | formats.DOCUMENT_EXTS
     assert set(formats.DIRECT_MEDIA_SUFFIXES) == all_exts
 
 

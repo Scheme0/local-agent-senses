@@ -4,6 +4,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-15
+
+### Added
+
+- `ConfigError` for broken config files: an explicit `VISION_CONFIG` that is
+  missing, unreadable, invalid JSON, or not an object is a hard error with a
+  readable message (no silent fallback to defaults); the CLI exits 2 and
+  `--doctor --json` reports a structured `config` check instead of a traceback.
+- `MAX_THUMBNAIL_FRAMES` hard cap (1200) on video thumbnail candidates, plus
+  duration-bounded sampling FPS and windowed single-pass extraction so a short
+  time window never decodes the whole video.
+- Server-side MCP argument validation (`invalid_input` code): media strings,
+  image lists, prompt/context/crop length caps, finite positive numbers
+  (rejecting NaN/Infinity/negatives/bool-as-int), and strict mode/band/lang/
+  asr_model enums.
+- Staged execution deadline in the service facade: `deadline_exceeded` code
+  distinct from `busy`, stage checks before probe/sampling/model/ASR/formatting,
+  and remaining-time budgets for ffmpeg, speech subprocesses and Ollama calls.
+- Remote endpoint policy (`api_base` must be https except localhost) and basic
+  external-tool path validation for explicitly configured executables.
+- MCP cache hardening: restrictive permissions on POSIX, per-entry/disk size
+  and file-count limits, version/model/backend-aware cache keys, and controlled
+  error logging without prompts, paths, keys or URLs.
+- Locked dependencies (`uv.lock`) and a CI split into lint / unit-tests /
+  packaging, with Actions pinned to commit SHAs and a clean-venv install check
+  of the built wheel.
+- `config.package_version()` as the single runtime version source; the CLI and
+  the MCP server no longer hardcode version strings.
+
+### Fixed
+
+- Video thumbnail sampling no longer buffers unbounded raw frames from very
+  long videos.
+- yt-dlp resolution re-checks the original URL and every returned stream URL.
+- `scripts/setup.sh` / `scripts/setup.ps1` now fail the health check by default
+  (opt-out via `ALLOW_CHECK_FAILURE=1` / `-AllowCheckFailure`).
+- Docs no longer over-claim DNS rebinding protection; direct ffmpeg URL
+  streaming is documented as best-effort.
+
 ## [0.5.0] - 2026-08-13
 
 ### Added

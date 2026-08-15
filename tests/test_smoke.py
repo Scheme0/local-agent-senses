@@ -42,6 +42,7 @@ def test_cli_doctor_does_not_scan_conda(monkeypatch):
 
 
 def test_mcp_initialize_and_tools_list_smoke():
+    import config
     messages = "\n".join([
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
         json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
@@ -49,7 +50,7 @@ def test_mcp_initialize_and_tools_list_smoke():
     proc = _run(MCP, input_text=messages)
     responses = [json.loads(line) for line in proc.stdout.splitlines()]
     assert proc.returncode == 0
-    assert responses[0]["result"]["serverInfo"]["version"] == "0.5.0"
+    assert responses[0]["result"]["serverInfo"]["version"] == config.package_version()
     assert {tool["name"] for tool in responses[1]["result"]["tools"]} >= {
         "describe_image", "analyze_video", "vision_status"
     }
